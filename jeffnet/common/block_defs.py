@@ -1,6 +1,3 @@
-from .activations import get_act_fn
-
-
 BN_MOMENTUM_TF_DEFAULT = 1 - 0.99
 BN_EPS_TF_DEFAULT = 1e-3
 _BN_ARGS_TF = dict(momentum=BN_MOMENTUM_TF_DEFAULT, eps=BN_EPS_TF_DEFAULT)
@@ -52,9 +49,9 @@ def make_divisible(v, divisor=8, min_value=None):
     return new_v
 
 
-def round_channels(channels, multiplier=1.0, divisor=8, channel_min=None):
+def round_channels(channels, multiplier=1.0, divisor=8, feat_min=None):
     """Round number of filters based on depth multiplier."""
     if not multiplier:
         return channels
     channels *= multiplier
-    return make_divisible(channels, divisor, channel_min)
+    return make_divisible(channels, divisor, feat_min)

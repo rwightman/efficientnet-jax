@@ -1,16 +1,18 @@
+import objax.functional as F
 import jax.nn.functions as jnnf
 from functools import partial
 
 _ACT_FN = dict(
-    relu=jnnf.relu,
+    relu=F.relu,
     relu6=jnnf.relu6,
-    leaky_relu=jnnf.leaky_relu,
+    leaky_relu=F.leaky_relu,
     gelu=jnnf.gelu,
-    elu=jnnf.elu,
-    softplus=jnnf.softplus,
+    elu=F.elu,
+    softplus=F.softplus,
     silu=jnnf.silu,
     swish=jnnf.silu,
-    sigmoid=jnnf.sigmoid,
+    sigmoid=F.sigmoid,
+    tanh=F.tanh,
     hard_silu=jnnf.hard_silu,
     hard_swish=jnnf.hard_silu,
     hard_sigmoid=jnnf.hard_sigmoid,

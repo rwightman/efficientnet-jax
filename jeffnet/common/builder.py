@@ -193,7 +193,8 @@ def _scale_stage_depth(stack_args, repeats, depth_multiplier=1.0, depth_trunc='c
     return sa_scaled
 
 
-def decode_arch_def(arch_def, depth_multiplier=1.0, depth_trunc='ceil', experts_multiplier=1, fix_first_last=False):
+def decode_arch_def(
+        arch_def, depth_multiplier=1.0, depth_trunc='ceil', experts_multiplier=1, fix_first_last=False):
     arch_args = []
     for stack_idx, block_strings in enumerate(arch_def):
         assert isinstance(block_strings, list)
@@ -222,42 +223,43 @@ class EfficientNetBuilder:
     https://github.com/facebookresearch/maskrcnn-benchmark/blob/master/maskrcnn_benchmark/modeling/backbone/fbnet_builder.py
 
     """
-    def __init__(self, block_factory, channel_multiplier=1.0, channel_divisor=8, channel_min=None,
-                 output_stride=32, pad_type='', act_fn=None, se_kwargs=None,
-                 norm_layer=None, norm_kwargs=None, drop_path_rate=0., feature_location='',
-                 verbose=False):
-        self.block_factory = block_factory
-        self.channel_multiplier = channel_multiplier
-        self.channel_divisor = channel_divisor
-        self.channel_min = channel_min
+    def __init__(self, in_chs, block_args, block_factory,
+                 feat_multiplier=1.0, feat_divisor=8, feat_min=None,
+                 output_stride=32, pad_type='', conv_layer=None, norm_layer=None, se_layer=None,
+                 act_fn=None, drop_path_rate=0., feature_location='', verbose=False):
+        self.in_chs = in_chs  # num input ch from stem
+        self.block_args = block_args  # block argument layout
+        self.block_factory = block_factory  # factory to build framework specific blocks
+        self.feat_multiplier = feat_multiplier
+        self.feat_divisor = feat_divisor
+        self.feat_min = feat_min
         self.output_stride = output_stride
         self.act_fn = act_fn
         self.drop_path_rate = drop_path_rate
         self.default_args = dict(
             pad_type=pad_type,
-            se_kwargs=se_kwargs,
+            conv_layer=conv_layer,
             norm_layer=norm_layer,
-            norm_kwargs=norm_kwargs,
+            se_layer=se_layer,
         )
         self.feature_location = feature_location
         assert feature_location in ('bottleneck', 'expansion', '')
         self.verbose = verbose
 
-        # state updated during build, consumed by model
-        self.in_chs = None
-        self.features = []
+        self.features = []  # information about feature maps, constructed during build
 
     def _round_channels(self, chs):
-        return round_channels(chs, self.channel_multiplier, self.channel_divisor, self.channel_min)
+        return round_channels(chs, self.feat_multiplier, self.feat_divisor, self.feat_min)
 
     def _make_block(self, ba, block_idx, block_count):
         drop_path_rate = self.drop_path_rate * block_idx / block_count
         block_type = ba.pop('block_type')
 
+        # NOTE: block act fn overrides the model default
+        act_fn = ba['act_fn'] if ba['act_fn'] is not None else self.act_fn
+        act_fn = self.block_factory.get_act_fn(act_fn)  # map string acts to functions
         ba_overlay = dict(
-            in_chs=self.in_chs, out_chs=self._round_channels(ba['out_chs']),
-            # NOTE: block act fn overrides the model default
-            act_fn=ba['act_fn'] if ba['act_fn'] is not None else self.act_fn,
+            in_chs=self.in_chs, out_chs=self._round_channels(ba['out_chs']), act_fn=act_fn,
             drop_path_rate=drop_path_rate, **self.default_args)
         ba.update(ba_overlay)
         if 'fake_in_chs' in ba and ba['fake_in_chs']:
@@ -268,22 +270,23 @@ class EfficientNetBuilder:
         _log_info_if(f'  {block_type.upper()} {block_idx}, Args: {str(ba)}', self.verbose)
         if block_type == 'ir':
             if ba.get('num_experts', 0) > 0:
-                block = self.block_factory.CondConv(**ba)
+                assert False, 'Not currently supported'
+                block = self.block_factory.CondConv(block_idx, **ba)
             else:
-                block = self.block_factory.InvertedResidual(**ba)
+                block = self.block_factory.InvertedResidual(block_idx, **ba)
         elif block_type == 'ds' or block_type == 'dsa':
-            block = self.block_factory.DepthwiseSeparable(**ba)
+            block = self.block_factory.DepthwiseSeparable(block_idx, **ba)
         elif block_type == 'er':
-            block = self.block_factory.EdgeResidual(**ba)
+            block = self.block_factory.EdgeResidual(block_idx, **ba)
         elif block_type == 'cn':
-            block = self.block_factory.ConvBnAct(**ba)
+            block = self.block_factory.ConvBnAct(block_idx, **ba)
         else:
             assert False, 'Uknkown block type (%s) while building model.' % block_type
         self.in_chs = ba['out_chs']  # update in_chs for arg of next block
 
         return block
 
-    def __call__(self, in_chs, model_block_args):
+    def __call__(self):
         """ Build the blocks
         Args:
             in_chs: Number of input-channels passed to first block
@@ -292,22 +295,21 @@ class EfficientNetBuilder:
         Return:
              List of block stacks (each stack wrapped in nn.Sequential)
         """
-        _log_info_if('Building model trunk with %d stages...' % len(model_block_args), self.verbose)
-        self.in_chs = in_chs
-        total_block_count = sum([len(x) for x in model_block_args])
+        _log_info_if('Building model trunk with %d stages...' % len(self.block_args), self.verbose)
+        total_block_count = sum([len(x) for x in self.block_args])
         total_block_idx = 0
         current_stride = 2
         current_dilation = 1
         stages = []
-        if model_block_args[0][0]['stride'] > 1:
+        if self.block_args[0][0]['stride'] > 1:
             # if the first block starts with a stride, we need to extract first level feat from stem
             feature_info = dict(
-                module='act1', num_chs=in_chs, stage=0, reduction=current_stride,
+                module='act1', num_chs=self.in_chs, stage=0, reduction=current_stride,
                 hook_type='forward' if self.feature_location != 'bottleneck' else '')
             self.features.append(feature_info)
 
         # outer list of block_args defines the stacks
-        for stack_idx, stack_args in enumerate(model_block_args):
+        for stack_idx, stack_args in enumerate(self.block_args):
             _log_info_if('Stack: {}'.format(stack_idx), self.verbose)
             assert isinstance(stack_args, list)
 

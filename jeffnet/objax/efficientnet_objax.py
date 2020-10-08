@@ -1,12 +1,15 @@
+from typing import Optional
+
 import objax.nn as nn
+import objax.functional as F
+import jax.nn.functions as jnnf
 from objax import Module, ModuleList
 from objax.typing import JaxArray
 
-from jeffnet.common import round_channels, get_act_fn, resolve_bn_args,\
-    decode_arch_def, EfficientNetBuilder
+from jeffnet.common import round_channels, decode_arch_def, EfficientNetBuilder
 
-from .layers import Conv2d, drop_path
-from .blocks_objax import ConvBnAct, BlockFactory
+from .layers import Conv2d, drop_path, get_act_fn
+from .blocks_objax import ConvBnAct, SqueezeExcite, BlockFactory
 
 _DEBUG = True
 
@@ -39,13 +42,12 @@ class EfficientHead(Module):
 class Head(Module):
     """ Standard Head from EfficientNet, MixNet, MNasNet, MobileNetV2, etc. """
     def __init__(self, in_chs: int, num_features: int, num_classes: int = 1000, global_pool='avg',
-                 act_fn='relu', norm_layer=nn.BatchNorm2D, norm_kwargs=None):
-        norm_kwargs = norm_kwargs or {}
+                 act_fn=F.relu, conv_layer=Conv2d, norm_layer=nn.BatchNorm2D):
         self.global_pool = global_pool
 
-        self.conv_1x1 = Conv2d(in_chs, num_features, 1)
-        self.bn = norm_layer(num_features, **norm_kwargs)
-        self.act_fn = get_act_fn(act_fn)
+        self.conv_1x1 = conv_layer(in_chs, num_features, 1)
+        self.bn = norm_layer(num_features)
+        self.act_fn = act_fn
         if num_classes > 0:
             self.classifier = nn.Linear(num_features, num_classes, use_bias=True)
         else:
@@ -76,35 +78,35 @@ class EfficientNet(Module):
 
     """
 
-    def __init__(self, block_args, num_classes=1000, num_features=1280, in_chs=3, stem_chs=32,
-                 channel_multiplier=1.0, channel_divisor=8, channel_min=None,
-                 output_stride=32, padding='LIKE', fix_stem=False, act_fn='relu', drop_rate=0., drop_path_rate=0.,
-                 se_kwargs=None, norm_layer=nn.BatchNorm2D, norm_kwargs=None, global_pool='avg'):
+    def __init__(self, block_args,
+                 num_classes: int = 1000, num_features: int = 1280, drop_rate: float = 0., global_pool: str = 'avg',
+                 feat_multiplier: float = 1.0, feat_divisor: int = 8, feat_min: Optional[int] = None,
+                 in_chs: int = 3, stem_chs: int = 32, fix_stem: bool = False, output_stride: int = 32,
+                 pad_type: str ='LIKE', conv_layer=Conv2d, norm_layer=nn.BatchNorm2D, se_layer=SqueezeExcite,
+                 act_fn=F.relu, drop_path_rate: float = 0.):
         super(EfficientNet, self).__init__()
-        norm_kwargs = norm_kwargs or {}
 
         self.num_classes = num_classes
         self.num_features = num_features
         self.drop_rate = drop_rate
 
+        cba_kwargs = dict(conv_layer=conv_layer, norm_layer=norm_layer, act_fn=act_fn)
         if not fix_stem:
-            stem_chs = round_channels(stem_chs, channel_multiplier, channel_divisor, channel_min)
-        self.stem = ConvBnAct(
-            in_chs, stem_chs, 3, stride=2, pad_type=padding, act_fn=act_fn,
-            norm_layer=norm_layer, norm_kwargs=norm_kwargs)
+            stem_chs = round_channels(stem_chs, feat_multiplier, feat_divisor, feat_min)
+        self.stem = ConvBnAct(in_chs, stem_chs, 3, stride=2, pad_type=pad_type, **cba_kwargs)
 
         # Middle stages (IR/ER/DS Blocks)
         builder = EfficientNetBuilder(
-            BlockFactory(), channel_multiplier, channel_divisor, channel_min, output_stride, padding,
-            act_fn, se_kwargs, norm_layer, norm_kwargs, drop_path_rate, verbose=_DEBUG)
-        self.blocks = nn.Sequential([nn.Sequential(b) for b in builder(stem_chs, block_args)])
+            stem_chs, block_args, BlockFactory(),
+            feat_multiplier=feat_multiplier, feat_divisor=feat_divisor, feat_min=feat_min,
+            output_stride=output_stride, pad_type=pad_type, se_layer=se_layer,
+            **cba_kwargs, drop_path_rate=drop_path_rate, verbose=_DEBUG)
+        self.blocks = nn.Sequential([nn.Sequential(b) for b in builder()])
         self.feature_info = builder.features
         head_chs = builder.in_chs
 
         # Head (1x1 conv + pooling + classifier)
-        self.head = Head(
-            head_chs, self.num_features, self.num_classes, global_pool=global_pool,
-            act_fn=act_fn, norm_layer=norm_layer, norm_kwargs=norm_kwargs)
+        self.head = Head(head_chs, self.num_features, self.num_classes, global_pool=global_pool, **cba_kwargs)
 
         # how to init?
 
@@ -122,15 +124,14 @@ class EfficientNet(Module):
         return x
 
 
-
-def _gen_efficientnet(variant, channel_multiplier=1.0, depth_multiplier=1.0, pretrained=False, **kwargs):
+def _gen_efficientnet(variant, feat_multiplier=1.0, depth_multiplier=1.0, pretrained=False, **kwargs):
     """Creates an EfficientNet model.
 
     Ref impl: https://github.com/tensorflow/tpu/blob/master/models/official/efficientnet/efficientnet_model.py
     Paper: https://arxiv.org/abs/1905.11946
 
     EfficientNet params
-    name: (channel_multiplier, depth_multiplier, resolution, dropout_rate)
+    name: (feat_multiplier, depth_multiplier, resolution, dropout_rate)
     'efficientnet-b0': (1.0, 1.0, 224, 0.2),
     'efficientnet-b1': (1.0, 1.1, 240, 0.2),
     'efficientnet-b2': (1.1, 1.2, 260, 0.3),
@@ -143,7 +144,7 @@ def _gen_efficientnet(variant, channel_multiplier=1.0, depth_multiplier=1.0, pre
     'efficientnet-l2': (4.3, 5.3, 800, 0.5),
 
     Args:
-      channel_multiplier: multiplier to number of channels per layer
+      feat_multiplier: multiplier to number of channels per layer
       depth_multiplier: multiplier to number of repeats per stage
 
     """
@@ -158,11 +159,10 @@ def _gen_efficientnet(variant, channel_multiplier=1.0, depth_multiplier=1.0, pre
     ]
     model_kwargs = dict(
         block_args=decode_arch_def(arch_def, depth_multiplier),
-        num_features=round_channels(1280, channel_multiplier, 8, None),
+        num_features=round_channels(1280, feat_multiplier, 8, None),
         stem_chs=32,
-        channel_multiplier=channel_multiplier,
-        act_fn=kwargs.pop('act_fn', 'swish'),
-        norm_kwargs=resolve_bn_args(kwargs),
+        feat_multiplier=feat_multiplier,
+        act_fn=kwargs.pop('act_fn', 'silu'),
         **kwargs,
     )
     model = EfficientNet(**model_kwargs)

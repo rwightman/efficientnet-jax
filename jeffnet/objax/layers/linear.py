@@ -16,45 +16,45 @@ class Conv2d(Module):
     """Applies a 2D convolution on a 4D-input batch of shape (N,C,H,W)."""
 
     def __init__(self,
-                 nin: int,
-                 nout: int,
-                 k: Union[Tuple[int, int], int],
+                 in_channels: int,
+                 out_channels: int,
+                 kernel_size: Union[Tuple[int, int], int],
                  stride: Union[Tuple[int, int], int] = 1,
                  padding: Union[str, Tuple[int, int], int] = 0,
                  dilation: Union[Tuple[int, int], int] = 1,
                  groups: int = 1,
-                 use_bias: bool = False,
-                 w_init: Callable = kaiming_normal):
+                 bias: bool = False,
+                 kernel_init: Callable = kaiming_normal,
+                 bias_init: Callable = jn.zeros,
+                 ):
         """Creates a Conv2D module instance.
 
         Args:
-            nin: number of channels of the input tensor.
-            nout: number of channels of the output tensor.
-            k: size of the convolution kernel, either tuple (height, width) or single number if they're the same.
+            in_channels: number of channels of the input tensor.
+            out_channels: number of channels of the output tensor.
+            kernel_size: size of the convolution kernel, either tuple (height, width) or single number if they're the same.
             stride: convolution strides, either tuple (stride_y, stride_x) or single number if they're the same.
             dilation: spacing between kernel points (also known as astrous convolution),
                        either tuple (dilation_y, dilation_x) or single number if they're the same.
             groups: number of input and output channels group. When groups > 1 convolution operation is applied
                     individually for each group. nin and nout must both be divisible by groups.
             padding: padding of the input tensor, either Padding.SAME or Padding.VALID.
-            use_bias: if True then convolution will have bias term.
-            w_init: initializer for convolution kernel (a function that takes in a HWIO shape and returns a 4D matrix).
+            bias: if True then convolution will have bias term.
+            kernel_init: initializer for convolution kernel (a function that takes in a HWIO shape and returns a 4D matrix).
         """
         super().__init__()
-        assert nin % groups == 0, 'in_chs should be divisible by groups'
-        assert nout % groups == 0, 'out_chs should be divisible by groups'
-        self.b = TrainVar(jn.zeros((nout, 1, 1))) if use_bias else None
-        self.w = TrainVar(w_init((*util.to_tuple(k, 2), nin // groups, nout)))  # HWIO
+        assert in_channels % groups == 0, 'in_chs should be divisible by groups'
+        assert out_channels % groups == 0, 'out_chs should be divisible by groups'
+        self.b = TrainVar(bias_init((out_channels, 1, 1))) if bias else None
+        self.w = TrainVar(kernel_init((*util.to_tuple(kernel_size, 2), in_channels // groups, out_channels)))  # HWIO
 
         if isinstance(padding, str):
             if padding == 'LIKE':
-                padding = get_like_padding(k, stride, dilation)
+                padding = get_like_padding(kernel_size, stride, dilation)
                 padding = util.to_tuple(padding, 2)
-                # padding = [(0, 0), padding, padding, (0, 0)]
                 padding = [padding, padding]
         else:
             padding = util.to_tuple(padding, 2)
-            # padding = [(0, 0), padding, padding, (0, 0)]
             padding = [padding, padding]
         self.padding = padding
         self.strides = util.to_tuple(stride, 2)
@@ -71,3 +71,33 @@ class Conv2d(Module):
             y += self.b.value
         return y
 
+
+class Linear(Module):
+    """Applies a linear transformation on an input batch."""
+
+    def __init__(
+            self,
+            in_features: int,
+            out_features: int,
+            bias: bool = True,
+            weight_init: Callable = xavier_normal,
+            bias_init: Callable = jn.zeros,
+    ):
+        """Creates a Linear module instance.
+
+        Args:
+            in_features: number of channels of the input tensor.
+            out_features: number of channels of the output tensor.
+            bias: if True then linear layer will have bias term.
+            weight_init: weight initializer for linear layer (a function that takes in a IO shape and returns a 2D matrix).
+        """
+        super().__init__()
+        self.b = TrainVar(bias_init(out_features)) if bias else None
+        self.w = TrainVar(weight_init((in_features, out_features)))
+
+    def __call__(self, x: JaxArray) -> JaxArray:
+        """Returns the results of applying the linear transformation to input x."""
+        y = jn.dot(x, self.w.value)
+        if self.b:
+            y += self.b.value
+        return y
