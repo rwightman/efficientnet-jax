@@ -1,10 +1,10 @@
 import flax.linen as nn
-import jax.nn.functions as jnnf
+import jax.nn as jnn
 from functools import partial
 
 _ACT_FN = dict(
     relu=nn.relu,
-    relu6=nn.relu6,
+    relu6=jnn.relu6,
     leaky_relu=nn.leaky_relu,
     gelu=nn.gelu,
     elu=nn.elu,
@@ -13,10 +13,10 @@ _ACT_FN = dict(
     swish=nn.swish,
     sigmoid=nn.sigmoid,
     tanh=nn.tanh,
-    hard_silu=jnnf.hard_silu,
-    hard_swish=jnnf.hard_silu,
-    hard_sigmoid=jnnf.hard_sigmoid,
-    hard_tanh=jnnf.hard_tanh,
+    hard_silu=jnn.hard_silu,
+    hard_swish=jnn.hard_silu,
+    hard_sigmoid=jnn.hard_sigmoid,
+    hard_tanh=jnn.hard_tanh,
 )
 
 

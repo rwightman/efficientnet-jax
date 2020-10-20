@@ -5,7 +5,6 @@ Hacked together by / Copyright 2020 Ross Wightman
 from typing import Any, Callable, Union, Optional
 
 from flax import linen as nn
-import jax.numpy as jnp
 
 from jeffnet.common.block_defs import *
 from .layers import conv2d, batchnorm2d, drop_path, get_act_fn
@@ -91,10 +90,11 @@ class DepthwiseSeparable(nn.Module):
         x = self.act_fn(x)
 
         if self.se_layer is not None and self.se_ratio > 0:
-            x = self.se_layer(num_features=self.in_features, se_ratio=self.se_ratio, name='se')(x)
+            x = self.se_layer(
+                num_features=self.in_features, se_ratio=self.se_ratio, act_fn=self.act_fn, name='se')(x)
 
         x = self.conv_layer(self.out_features, self.pw_kernel_size, padding=self.pad_type, name='conv_pw')(x)
-        x = self.norm_layer(name='bn_pw')(x)
+        x = self.norm_layer(name='bn_pw', training=training)(x)
         if self.pw_act:
             x = self.act_fn(x)
 
@@ -147,10 +147,11 @@ class InvertedResidual(nn.Module):
 
         if self.se_layer is not None and self.se_ratio > 0:
             x = self.se_layer(
-                num_features=features, block_features=self.in_features, se_ratio=self.se_ratio, name='se')(x)
+                num_features=features, block_features=self.in_features, se_ratio=self.se_ratio,
+                act_fn=self.act_fn, name='se')(x)
 
         x = self.conv_layer(self.out_features, self.pw_kernel_size, padding=self.pad_type, name='conv_pw')(x)
-        x = self.norm_layer(name='bn_pw')(x)
+        x = self.norm_layer(name='bn_pw', training=training)(x)
 
         if (self.stride == 1 and self.in_features == self.out_features) and not self.noskip:
             if self.drop_path_rate > 0.:
@@ -188,19 +189,20 @@ class EdgeResidual(nn.Module):
 
         # Point-wise expansion
         x = self.conv_layer(features, self.exp_kernel_size, padding=self.pad_type, name='conv_exp')(x)
-        x = self.norm_layer(name='bn_exp')(x)
+        x = self.norm_layer(name='bn_exp', training=training)(x)
         x = self.act_fn(x)
 
         if self.se_layer is not None and self.se_ratio > 0:
             x = self.se_layer(
-                num_features=features, block_features=self.in_features, se_ratio=self.se_ratio, name='se')(x)
+                num_features=features, block_features=self.in_features, se_ratio=self.se_ratio,
+                act_fn=self.act_fn, name='se')(x)
 
         x = self.conv_layer(self.out_features, self.pw_kernel_size, padding=self.pad_type, name='conv_pw')(x)
-        x = self.norm_layer(name='bn_pw')(x)
+        x = self.norm_layer(name='bn_pw', training=training)(x)
 
         if (self.stride == 1 and self.in_features == self.out_features) and not self.noskip:
             if self.drop_path_rate > 0.:
-                x = drop_path(x, self.drop_path_rate, self.training)
+                x = drop_path(x, self.drop_path_rate, training=training)
             x = x + shortcut
         return x
 
@@ -218,7 +220,7 @@ def chan_to_features(kwargs):
 class BlockFactory:
 
     @staticmethod
-    def CondConv(block_idx,**block_args):
+    def CondConv(block_idx, **block_args):
         assert False, "Not currently impl"
 
     @staticmethod
@@ -227,17 +229,17 @@ class BlockFactory:
         return InvertedResidual(**block_args, name=f'block{block_idx}')
 
     @staticmethod
-    def DepthwiseSeparable(block_idx,**block_args):
+    def DepthwiseSeparable(block_idx, **block_args):
         block_args = chan_to_features(block_args)
         return DepthwiseSeparable(**block_args, name=f'block{block_idx}')
 
     @staticmethod
-    def EdgeResidual(block_idx,**block_args):
+    def EdgeResidual(block_idx, **block_args):
         block_args = chan_to_features(block_args)
         return EdgeResidual(**block_args, name=f'block{block_idx}')
 
     @staticmethod
-    def ConvBnAct(block_idx,**block_args):
+    def ConvBnAct(block_idx, **block_args):
         block_args.pop('drop_path_rate', None)
         block_args.pop('se_layer', None)
         block_args = chan_to_features(block_args)
@@ -246,3 +248,5 @@ class BlockFactory:
     @staticmethod
     def get_act_fn(act_fn: Union[str, Callable]):
         return get_act_fn(act_fn) if isinstance(act_fn, str) else act_fn
+
+

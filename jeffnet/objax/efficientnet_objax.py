@@ -1,15 +1,17 @@
-from typing import Optional
+from typing import Optional, Union, Callable
+from functools import partial
 
 import objax.nn as nn
 import objax.functional as F
 import jax.nn.functions as jnnf
-from objax import Module, ModuleList
+from objax import Module
 from objax.typing import JaxArray
 
 from jeffnet.common import round_channels, decode_arch_def, EfficientNetBuilder
 
-from .layers import Conv2d, drop_path, get_act_fn
+from .layers import Conv2d, BatchNorm2d, Linear
 from .blocks_objax import ConvBnAct, SqueezeExcite, BlockFactory
+
 
 _DEBUG = True
 
@@ -17,7 +19,7 @@ _DEBUG = True
 class EfficientHead(Module):
     """ EfficientHead from MobileNetV3 """
     def __init__(self, in_chs: int, num_features: int, num_classes: int=1000, global_pool='avg',
-                 act_fn='relu', norm_layer=nn.BatchNorm2D, norm_kwargs=None):
+                 act_fn='relu', norm_layer=BatchNorm2d, norm_kwargs=None):
         norm_kwargs = norm_kwargs or {}
         self.global_pool = global_pool
 
@@ -42,14 +44,14 @@ class EfficientHead(Module):
 class Head(Module):
     """ Standard Head from EfficientNet, MixNet, MNasNet, MobileNetV2, etc. """
     def __init__(self, in_chs: int, num_features: int, num_classes: int = 1000, global_pool='avg',
-                 act_fn=F.relu, conv_layer=Conv2d, norm_layer=nn.BatchNorm2D):
+                 act_fn=F.relu, conv_layer=Conv2d, norm_layer=BatchNorm2d):
         self.global_pool = global_pool
 
         self.conv_1x1 = conv_layer(in_chs, num_features, 1)
         self.bn = norm_layer(num_features)
         self.act_fn = act_fn
         if num_classes > 0:
-            self.classifier = nn.Linear(num_features, num_classes, use_bias=True)
+            self.classifier = Linear(num_features, num_classes, bias=True)
         else:
             self.classifier = None
 
@@ -82,7 +84,7 @@ class EfficientNet(Module):
                  num_classes: int = 1000, num_features: int = 1280, drop_rate: float = 0., global_pool: str = 'avg',
                  feat_multiplier: float = 1.0, feat_divisor: int = 8, feat_min: Optional[int] = None,
                  in_chs: int = 3, stem_chs: int = 32, fix_stem: bool = False, output_stride: int = 32,
-                 pad_type: str ='LIKE', conv_layer=Conv2d, norm_layer=nn.BatchNorm2D, se_layer=SqueezeExcite,
+                 pad_type: str ='LIKE', conv_layer=Conv2d, norm_layer=BatchNorm2d, se_layer=SqueezeExcite,
                  act_fn=F.relu, drop_path_rate: float = 0.):
         super(EfficientNet, self).__init__()
 
@@ -162,12 +164,20 @@ def _gen_efficientnet(variant, feat_multiplier=1.0, depth_multiplier=1.0, pretra
         num_features=round_channels(1280, feat_multiplier, 8, None),
         stem_chs=32,
         feat_multiplier=feat_multiplier,
-        act_fn=kwargs.pop('act_fn', 'silu'),
+        act_fn=kwargs.pop('act_fn', jnnf.silu),
         **kwargs,
     )
     model = EfficientNet(**model_kwargs)
     return model
 
 
-def efficientnet_b0(pretrained=False, **kwargs):
-    return _gen_efficientnet('efficientnet_b0', pretrained=pretrained, **kwargs)
+def pt_efficientnet_b0(pretrained=False, **kwargs):
+    norm_layer = partial(BatchNorm2d, eps=1e-5)
+    return _gen_efficientnet(
+        'efficientnet_b0', pretrained=pretrained, pad_type='LIKE', norm_layer=norm_layer, **kwargs)
+
+
+def tf_efficientnet_b0(pretrained=False, **kwargs):
+    norm_layer = partial(BatchNorm2d, eps=1e-3)
+    return _gen_efficientnet(
+        'tf_efficientnet_b0', pretrained=pretrained, pad_type='SAME', norm_layer=norm_layer, **kwargs)

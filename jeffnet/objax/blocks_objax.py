@@ -9,8 +9,7 @@ import objax.functional as F
 from objax import Module
 
 from jeffnet.common.block_defs import *
-
-from .layers import Conv2d, drop_path, get_act_fn
+from .layers import Conv2d, BatchNorm2d, drop_path, get_act_fn
 
 
 class SqueezeExcite(Module):
@@ -34,7 +33,7 @@ class SqueezeExcite(Module):
 
 class ConvBnAct(Module):
     def __init__(self, in_chs, out_chs, kernel_size,
-                 stride=1, dilation=1, pad_type='LIKE', conv_layer=Conv2d, norm_layer=nn.BatchNorm2D, act_fn=F.relu):
+                 stride=1, dilation=1, pad_type='LIKE', conv_layer=Conv2d, norm_layer=BatchNorm2d, act_fn=F.relu):
         super(ConvBnAct, self).__init__()
         self.conv = conv_layer(in_chs, out_chs, kernel_size, stride=stride, dilation=dilation, padding=pad_type)
         self.bn = norm_layer(out_chs)
@@ -55,7 +54,7 @@ class DepthwiseSeparable(Module):
     def __init__(self, in_chs, out_chs, dw_kernel_size=3,
                  stride=1, dilation=1, pad_type='LIKE', noskip=False,
                  pw_kernel_size=1, pw_act=False, se_ratio=0.,
-                 conv_layer=Conv2d, norm_layer=nn.BatchNorm2D, se_layer=None, act_fn=F.relu, drop_path_rate=0.):
+                 conv_layer=Conv2d, norm_layer=BatchNorm2d, se_layer=None, act_fn=F.relu, drop_path_rate=0.):
         super(DepthwiseSeparable, self).__init__()
         self.has_residual = (stride == 1 and in_chs == out_chs) and not noskip
         self.has_pw_act = pw_act  # activation after point-wise conv
@@ -69,7 +68,7 @@ class DepthwiseSeparable(Module):
         # Squeeze-and-excitation
         self.se = None
         if se_layer is not None and se_ratio > 0.:
-            self.se = se_layer(in_chs, se_ratio=se_ratio)
+            self.se = se_layer(in_chs, se_ratio=se_ratio, act_fn=act_fn)
 
         self.conv_pw = conv_layer(in_chs, out_chs, pw_kernel_size, padding=pad_type)
         self.bn_pw = norm_layer(out_chs)
@@ -102,7 +101,7 @@ class InvertedResidual(Module):
     def __init__(self, in_chs, out_chs, dw_kernel_size=3,
                  stride=1, dilation=1, pad_type='LIKE', noskip=False,
                  exp_ratio=1.0, exp_kernel_size=1, pw_kernel_size=1, se_ratio=0.,
-                 conv_layer=Conv2d, norm_layer=nn.BatchNorm2D, se_layer=None, act_fn=F.relu, drop_path_rate=0.):
+                 conv_layer=Conv2d, norm_layer=BatchNorm2d, se_layer=None, act_fn=F.relu, drop_path_rate=0.):
         super(InvertedResidual, self).__init__()
         mid_chs = make_divisible(in_chs * exp_ratio)
         self.has_residual = (in_chs == out_chs and stride == 1) and not noskip
@@ -122,7 +121,7 @@ class InvertedResidual(Module):
         # Squeeze-and-excitation
         self.se = None
         if se_layer is not None and se_ratio > 0.:
-            self.se = se_layer(mid_chs, block_chs=in_chs, se_ratio=se_ratio)
+            self.se = se_layer(mid_chs, block_chs=in_chs, se_ratio=se_ratio, act_fn=act_fn)
 
         # Point-wise linear projection
         self.conv_pw = conv_layer(mid_chs, out_chs, pw_kernel_size, padding=pad_type)
@@ -162,7 +161,7 @@ class EdgeResidual(Module):
 
     def __init__(self, in_chs, out_chs, exp_kernel_size=3, exp_ratio=1.0, fake_in_chs=0,
                  stride=1, dilation=1, padding='LIKE', noskip=False, pw_kernel_size=1,
-                 se_ratio=0., conv_layer=Conv2d, norm_layer=nn.BatchNorm2D, se_layer=None, act_fn=F.relu,
+                 se_ratio=0., conv_layer=Conv2d, norm_layer=BatchNorm2d, se_layer=None, act_fn=F.relu,
                  drop_path_rate=0.):
         super(EdgeResidual, self).__init__()
         if fake_in_chs > 0:
@@ -180,7 +179,7 @@ class EdgeResidual(Module):
         # Squeeze-and-excitation
         self.se = None
         if se_layer is not None and se_ratio > 0.:
-            self.se = se_layer(mid_chs, block_chs=in_chs, se_ratio=se_ratio)
+            self.se = se_layer(mid_chs, block_chs=in_chs, se_ratio=se_ratio, act_fn=act_fn)
 
         # Point-wise linear projection
         self.conv_pw = conv_layer(
@@ -222,11 +221,11 @@ class BlockFactory:
         return InvertedResidual(**block_args)
 
     @staticmethod
-    def DepthwiseSeparable(block_idx,**block_args):
+    def DepthwiseSeparable(block_idx, **block_args):
         return DepthwiseSeparable(**block_args)
 
     @staticmethod
-    def EdgeResidual(block_idx,**block_args):
+    def EdgeResidual(block_idx, **block_args):
         return EdgeResidual(**block_args)
 
     @staticmethod

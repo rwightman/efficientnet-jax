@@ -228,7 +228,7 @@ class EfficientNetBuilder:
                  output_stride=32, pad_type='', conv_layer=None, norm_layer=None, se_layer=None,
                  act_fn=None, drop_path_rate=0., feature_location='', verbose=False):
         self.in_chs = in_chs  # num input ch from stem
-        self.block_args = block_args  # block argument layout
+        self.block_args = deepcopy(block_args)  # block argument layout, these are mutated
         self.block_factory = block_factory  # factory to build framework specific blocks
         self.feat_multiplier = feat_multiplier
         self.feat_divisor = feat_divisor

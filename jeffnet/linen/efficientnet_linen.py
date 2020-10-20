@@ -1,12 +1,12 @@
-from typing import Any, Callable, Sequence, Dict
+from typing import Any, Union, Callable, Sequence, Dict
 from functools import partial
+
+import jax
 from flax import linen as nn
-from flax.linen import Module
+import jax.nn as jnn
 
-from jeffnet.common import round_channels, get_act_fn, resolve_bn_args,\
-    decode_arch_def, EfficientNetBuilder
-
-from .layers import conv2d, linear, batchnorm2d, drop_path
+from jeffnet.common import round_channels, decode_arch_def, EfficientNetBuilder
+from .layers import conv2d, linear, batchnorm2d
 from .blocks_linen import ConvBnAct, SqueezeExcite, BlockFactory
 
 ModuleDef = Any
@@ -14,36 +14,12 @@ ModuleDef = Any
 _DEBUG = True
 
 
-# class EfficientHead(Module):
-#     """ EfficientHead from MobileNetV3 """
-#     def __init__(self, in_chs: int, num_features: int, num_classes: int=1000, global_pool='avg',
-#                  act_fn='relu', norm_layer=nn.BatchNorm2D, norm_kwargs=None):
-#         norm_kwargs = norm_kwargs or {}
-#         self.global_pool = global_pool
-#
-#         self.conv_1x1 = Conv2d(in_chs, num_features, 1)
-#         self.bn = norm_layer(num_features, **norm_kwargs)
-#         self.act_fn = act_fn
-#         if num_classes > 0:
-#             self.classifier = nn.Linear(num_features, num_classes, use_bias=True)
-#         else:
-#             self.classifier = None
-#
-#     def __call__(self, x: JaxArray, training: bool) -> JaxArray:
-#         if self.global_pool == 'avg':
-#             x = x.mean((2, 3))
-#         x = self.conv_1x1(x)
-#         x = self.bn(x, training=training)
-#         x = self.act_fn(x)
-#         x = self.classifier(x)
-#         return x
-
-
 class Head(nn.Module):
     """ Standard Head from EfficientNet, MixNet, MNasNet, MobileNetV2, etc. """
     num_features: int
     num_classes: int = 1000
     global_pool: str = 'avg'
+    drop_rate: float = 0.
 
     conv_layer: ModuleDef = conv2d
     norm_layer: ModuleDef = batchnorm2d
@@ -56,9 +32,10 @@ class Head(nn.Module):
         x = self.norm_layer(name='bn', training=training)(x)
         x = self.act_fn(x)
         if self.global_pool == 'avg':
-            x = x.mean((2, 3))
+            x = x.mean((1, 2))
+        x = nn.Dropout(rate=self.drop_rate)(x, deterministic=not training)
         if self.num_classes > 0:
-            self.linear_layer(self.num_classes, bias=True, name='classifier')(x)
+            x = self.linear_layer(self.num_classes, bias=True, name='classifier')(x)
         return x
 
 
@@ -102,24 +79,25 @@ class EfficientNet(nn.Module):
 
     @nn.compact
     def __call__(self, x, training: bool):
+        lkwargs = dict(conv_layer=self.conv_layer, norm_layer=self.norm_layer, act_fn=self.act_fn)
         if not self.fix_stem:
             stem_features = round_channels(
                 self.stem_features, self.feat_multiplier, self.feat_divisor, self.feat_min)
         x = ConvBnAct(
             out_features=stem_features, kernel_size=3, stride=2, pad_type=self.pad_type,
-            conv_layer=self.conv_layer, norm_layer=self.norm_layer, act_fn=self.act_fn,
-            name='stem')(x, training=training)
+            **lkwargs, name='stem')(x, training=training)
 
-        for stage in EfficientNetBuilder(
-                stem_features, self.block_args, BlockFactory(),
-                feat_multiplier=self.feat_multiplier, feat_divisor=self.feat_divisor, feat_min=self.feat_min,
-                output_stride=self.output_stride, pad_type=self.pad_type, conv_layer=self.conv_layer,
-                norm_layer=self.norm_layer, se_layer=self.se_layer, act_fn=self.act_fn,
-                drop_path_rate=self.drop_path_rate, verbose=_DEBUG)():
+        blocks = EfficientNetBuilder(
+            stem_features, self.block_args, BlockFactory(),
+            feat_multiplier=self.feat_multiplier, feat_divisor=self.feat_divisor, feat_min=self.feat_min,
+            output_stride=self.output_stride, pad_type=self.pad_type, se_layer=self.se_layer, **lkwargs,
+            drop_path_rate=self.drop_path_rate, verbose=_DEBUG)()
+        for stage in blocks:
             for block in stage:
                 x = block(x, training=training)
 
-        x = Head(num_features=self.num_features, num_classes=self.num_classes, name='head')(x, training=training)
+        x = Head(num_features=self.num_features, num_classes=self.num_classes, **lkwargs,
+                 drop_rate=self.drop_rate, name='head')(x, training=training)
         return x
 
 
@@ -164,14 +142,22 @@ def _gen_efficientnet(variant, feat_multiplier=1.0, depth_multiplier=1.0, pretra
         stem_features=32,
         feat_multiplier=feat_multiplier,
         conv_layer=conv2d,
-        norm_layer=batchnorm2d,
+        norm_layer=kwargs.pop('norm_layer', batchnorm2d),
         se_layer=SqueezeExcite,
-        act_fn=kwargs.pop('act_fn', nn.relu),
+        act_fn=kwargs.pop('act_fn', jnn.silu),
         **kwargs,
     )
     model = EfficientNet(**model_kwargs)
     return model
 
 
-def efficientnet_b0(pretrained=False, **kwargs):
-    return _gen_efficientnet('efficientnet_b0', pretrained=pretrained, **kwargs)
+def pt_efficientnet_b0(pretrained=False, **kwargs):
+    norm_layer = partial(batchnorm2d, eps=1e-5, momentum=0.9)
+    return _gen_efficientnet(
+        'efficientnet_b0', pretrained=pretrained, pad_type='LIKE', norm_layer=norm_layer, **kwargs)
+
+
+def tf_efficientnet_b0(pretrained=False, **kwargs):
+    norm_layer = partial(batchnorm2d, eps=1e-3, momentum=0.99)
+    return _gen_efficientnet(
+        'efficientnet_b0', pretrained=pretrained, pad_type='SAME', norm_layer=norm_layer, **kwargs)

@@ -1,7 +1,7 @@
 import inspect
 from typing import Callable, Iterable, Tuple, Optional, Union
 
-from jax import numpy as jn, random as jr, lax
+from jax import numpy as jnp, lax
 
 from objax import functional, random, util
 from objax.module import ModuleList, Module
@@ -25,7 +25,7 @@ class Conv2d(Module):
                  groups: int = 1,
                  bias: bool = False,
                  kernel_init: Callable = kaiming_normal,
-                 bias_init: Callable = jn.zeros,
+                 bias_init: Callable = jnp.zeros,
                  ):
         """Creates a Conv2D module instance.
 
@@ -45,30 +45,31 @@ class Conv2d(Module):
         super().__init__()
         assert in_channels % groups == 0, 'in_chs should be divisible by groups'
         assert out_channels % groups == 0, 'out_chs should be divisible by groups'
-        self.b = TrainVar(bias_init((out_channels, 1, 1))) if bias else None
-        self.w = TrainVar(kernel_init((*util.to_tuple(kernel_size, 2), in_channels // groups, out_channels)))  # HWIO
-
+        kernel_size = util.to_tuple(kernel_size, 2)
+        self.weight = TrainVar(kernel_init((out_channels, in_channels // groups, *kernel_size)))  # OIHW
+        self.bias = TrainVar(bias_init((out_channels,))) if bias else None
+        self.strides = util.to_tuple(stride, 2)
+        self.dilations = util.to_tuple(dilation, 2)
         if isinstance(padding, str):
             if padding == 'LIKE':
-                padding = get_like_padding(kernel_size, stride, dilation)
-                padding = util.to_tuple(padding, 2)
+                padding = (
+                    get_like_padding(kernel_size[0], self.strides[0], self.dilations[0]),
+                    get_like_padding(kernel_size[1], self.strides[1], self.dilations[1]))
                 padding = [padding, padding]
         else:
             padding = util.to_tuple(padding, 2)
             padding = [padding, padding]
         self.padding = padding
-        self.strides = util.to_tuple(stride, 2)
-        self.dilations = util.to_tuple(dilation, 2)
         self.groups = groups
 
     def __call__(self, x: JaxArray) -> JaxArray:
         """Returns the results of applying the convolution to input x."""
         y = lax.conv_general_dilated(
-            x, self.w.value, self.strides, self.padding,
+            x, self.weight.value, self.strides, self.padding,
             rhs_dilation=self.dilations, feature_group_count=self.groups,
-            dimension_numbers=('NCHW', 'HWIO', 'NCHW'))
-        if self.b:
-            y += self.b.value
+            dimension_numbers=('NCHW', 'OIHW', 'NCHW'), precision=lax.Precision.HIGHEST)
+        if self.bias:
+            y += self.bias.value.reshape((1, -1, 1, 1))
         return y
 
 
@@ -81,7 +82,7 @@ class Linear(Module):
             out_features: int,
             bias: bool = True,
             weight_init: Callable = xavier_normal,
-            bias_init: Callable = jn.zeros,
+            bias_init: Callable = jnp.zeros,
     ):
         """Creates a Linear module instance.
 
@@ -92,12 +93,12 @@ class Linear(Module):
             weight_init: weight initializer for linear layer (a function that takes in a IO shape and returns a 2D matrix).
         """
         super().__init__()
-        self.b = TrainVar(bias_init(out_features)) if bias else None
-        self.w = TrainVar(weight_init((in_features, out_features)))
+        self.weight = TrainVar(weight_init((out_features, in_features)))
+        self.bias = TrainVar(bias_init(out_features)) if bias else None
 
     def __call__(self, x: JaxArray) -> JaxArray:
         """Returns the results of applying the linear transformation to input x."""
-        y = jn.dot(x, self.w.value)
-        if self.b:
-            y += self.b.value
+        y = jnp.dot(x, self.weight.value.transpose())
+        if self.bias:
+            y += self.bias.value
         return y
