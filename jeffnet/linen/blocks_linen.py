@@ -6,8 +6,8 @@ from typing import Any, Callable, Union, Optional
 
 from flax import linen as nn
 
-from jeffnet.common.block_defs import *
-from .layers import conv2d, batchnorm2d, drop_path, get_act_fn
+from jeffnet.common.block_utils import *
+from .layers import conv2d, batchnorm2d, drop_path, get_act_fn, linear
 
 ModuleDef = Any
 
@@ -207,6 +207,31 @@ class EdgeResidual(nn.Module):
         return x
 
 
+class Head(nn.Module):
+    """ Standard Head from EfficientNet, MixNet, MNasNet, MobileNetV2, etc. """
+    num_features: int
+    num_classes: int = 1000
+    global_pool: str = 'avg'
+    drop_rate: float = 0.
+
+    conv_layer: ModuleDef = conv2d
+    norm_layer: ModuleDef = batchnorm2d
+    linear_layer: ModuleDef = linear
+    act_fn: Callable = nn.relu
+
+    @nn.compact
+    def __call__(self, x, training: bool):
+        x = self.conv_layer(self.num_features, 1, name='conv1x1')(x)
+        x = self.norm_layer(name='bn', training=training)(x)
+        x = self.act_fn(x)
+        if self.global_pool == 'avg':
+            x = x.mean((1, 2))
+        x = nn.Dropout(rate=self.drop_rate)(x, deterministic=not training)
+        if self.num_classes > 0:
+            x = self.linear_layer(self.num_classes, bias=True, name='classifier')(x)
+        return x
+
+
 def chan_to_features(kwargs):
     in_chs = kwargs.pop('in_chs', None)
     if in_chs is not None:
@@ -248,5 +273,3 @@ class BlockFactory:
     @staticmethod
     def get_act_fn(act_fn: Union[str, Callable]):
         return get_act_fn(act_fn) if isinstance(act_fn, str) else act_fn
-
-

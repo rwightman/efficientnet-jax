@@ -13,7 +13,7 @@ import numpy as np
 
 from timm.data import Dataset, DatasetTar, create_loader, resolve_data_config
 from jeffnet.common import load_state_dict, split_state_dict, correct_topk, AverageMeter
-from jeffnet.linen import tf_efficientnet_b0, pt_efficientnet_b0
+from jeffnet.linen import create_model
 
 parser = argparse.ArgumentParser(description='PyTorch ImageNet Validation')
 parser.add_argument('data', metavar='DIR', help='path to dataset')
@@ -31,7 +31,7 @@ def validate(args):
     rng = jax.random.PRNGKey(0)
     img_size = 224
     input_shape = (1, img_size, img_size, 3)
-    model = pt_efficientnet_b0()
+    model = create_model('pt_efficientnet_b0')
 
     state_dict = load_state_dict('./efficientnet_b0.npz', transpose=True)
     source_params, source_state = split_state_dict(state_dict)

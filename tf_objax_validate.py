@@ -7,7 +7,7 @@ from absl import logging
 import objax
 import jeffnet.data.tf_imagenet_data as imagenet_data
 from jeffnet.common import load_state_dict, correct_topk, AverageMeter
-from jeffnet.objax import tf_efficientnet_b0
+from jeffnet.objax import create_model
 
 
 def eval_forward(model, images, labels):
@@ -17,7 +17,7 @@ def eval_forward(model, images, labels):
 
 
 def validate(args):
-    model = tf_efficientnet_b0()
+    model = create_model('tf_efficientnet_b0')
     model_vars = model.vars()
     jax_state_dict = load_state_dict('./tf_efficientnet_b0_ns.npz')
 

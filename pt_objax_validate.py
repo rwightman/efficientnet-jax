@@ -7,11 +7,11 @@ import jax
 
 from timm.data import Dataset, DatasetTar, create_loader, resolve_data_config, RealLabelsImagenet
 from jeffnet.common import correct_topk, AverageMeter, load_state_dict
-from jeffnet.objax import tf_efficientnet_b0, pt_efficientnet_b0
+from jeffnet.objax import create_model
 
 
 def validate(args):
-    model = tf_efficientnet_b0()
+    model = create_model('pt_efficientnet_b0')
 
     model_vars = model.vars()
     jax_state_dict = load_state_dict('./efficientnet_b0.npz')

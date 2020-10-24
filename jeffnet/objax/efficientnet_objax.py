@@ -1,4 +1,4 @@
-from typing import Optional, Union, Callable
+from typing import Optional
 from functools import partial
 
 import objax.nn as nn
@@ -7,83 +7,30 @@ import jax.nn.functions as jnnf
 from objax import Module
 from objax.typing import JaxArray
 
-from jeffnet.common import round_channels, decode_arch_def, EfficientNetBuilder
+from jeffnet.common import get_model_cfg, round_features, decode_arch_def, EfficientNetBuilder
 
-from .layers import Conv2d, BatchNorm2d, Linear
-from .blocks_objax import ConvBnAct, SqueezeExcite, BlockFactory
-
-
-_DEBUG = True
-
-
-class EfficientHead(Module):
-    """ EfficientHead from MobileNetV3 """
-    def __init__(self, in_chs: int, num_features: int, num_classes: int=1000, global_pool='avg',
-                 act_fn='relu', norm_layer=BatchNorm2d, norm_kwargs=None):
-        norm_kwargs = norm_kwargs or {}
-        self.global_pool = global_pool
-
-        self.conv_1x1 = Conv2d(in_chs, num_features, 1)
-        self.bn = norm_layer(num_features, **norm_kwargs)
-        self.act_fn = act_fn
-        if num_classes > 0:
-            self.classifier = nn.Linear(num_features, num_classes, use_bias=True)
-        else:
-            self.classifier = None
-
-    def __call__(self, x: JaxArray, training: bool) -> JaxArray:
-        if self.global_pool == 'avg':
-            x = x.mean((2, 3))
-        x = self.conv_1x1(x)
-        x = self.bn(x, training=training)
-        x = self.act_fn(x)
-        x = self.classifier(x)
-        return x
-
-
-class Head(Module):
-    """ Standard Head from EfficientNet, MixNet, MNasNet, MobileNetV2, etc. """
-    def __init__(self, in_chs: int, num_features: int, num_classes: int = 1000, global_pool='avg',
-                 act_fn=F.relu, conv_layer=Conv2d, norm_layer=BatchNorm2d):
-        self.global_pool = global_pool
-
-        self.conv_1x1 = conv_layer(in_chs, num_features, 1)
-        self.bn = norm_layer(num_features)
-        self.act_fn = act_fn
-        if num_classes > 0:
-            self.classifier = Linear(num_features, num_classes, bias=True)
-        else:
-            self.classifier = None
-
-    def __call__(self, x: JaxArray, training: bool) -> JaxArray:
-        x = self.conv_1x1(x)
-        x = self.bn(x, training=training)
-        x = self.act_fn(x)
-        if self.global_pool == 'avg':
-            x = x.mean((2, 3))
-        if self.classifier is not None:
-            x = self.classifier(x)
-        return x
+from .helpers import load_pretrained
+from .layers import Conv2d, BatchNorm2d, get_act_fn
+from .blocks_objax import ConvBnAct, SqueezeExcite, BlockFactory, Head
 
 
 class EfficientNet(Module):
     """ EfficientNet
-
-    A flexible and performant PyTorch implementation of efficient network architectures, including:
       * EfficientNet B0-B8, L2
       * EfficientNet-EdgeTPU
-      * EfficientNet-CondConv
+      * EfficientNet-Lite
       * MixNet S, M, L, XL
+      * MobileNetV3
+      * MobileNetV2
       * MnasNet A1, B1, and small
       * FBNet C
       * Single-Path NAS Pixel1
-
     """
 
-    def __init__(self, block_args,
+    def __init__(self, block_defs,
                  num_classes: int = 1000, num_features: int = 1280, drop_rate: float = 0., global_pool: str = 'avg',
                  feat_multiplier: float = 1.0, feat_divisor: int = 8, feat_min: Optional[int] = None,
-                 in_chs: int = 3, stem_chs: int = 32, fix_stem: bool = False, output_stride: int = 32,
+                 in_chs: int = 3, stem_size: int = 32, fix_stem: bool = False, output_stride: int = 32,
                  pad_type: str ='LIKE', conv_layer=Conv2d, norm_layer=BatchNorm2d, se_layer=SqueezeExcite,
                  act_fn=F.relu, drop_path_rate: float = 0.):
         super(EfficientNet, self).__init__()
@@ -94,15 +41,15 @@ class EfficientNet(Module):
 
         cba_kwargs = dict(conv_layer=conv_layer, norm_layer=norm_layer, act_fn=act_fn)
         if not fix_stem:
-            stem_chs = round_channels(stem_chs, feat_multiplier, feat_divisor, feat_min)
-        self.stem = ConvBnAct(in_chs, stem_chs, 3, stride=2, pad_type=pad_type, **cba_kwargs)
+            stem_size = round_features(stem_size, feat_multiplier, feat_divisor, feat_min)
+        self.stem = ConvBnAct(in_chs, stem_size, 3, stride=2, pad_type=pad_type, **cba_kwargs)
 
         # Middle stages (IR/ER/DS Blocks)
         builder = EfficientNetBuilder(
-            stem_chs, block_args, BlockFactory(),
+            stem_size, block_defs, BlockFactory(),
             feat_multiplier=feat_multiplier, feat_divisor=feat_divisor, feat_min=feat_min,
-            output_stride=output_stride, pad_type=pad_type, se_layer=se_layer,
-            **cba_kwargs, drop_path_rate=drop_path_rate, verbose=_DEBUG)
+            output_stride=output_stride, pad_type=pad_type, se_layer=se_layer, **cba_kwargs,
+            drop_path_rate=drop_path_rate)
         self.blocks = nn.Sequential([nn.Sequential(b) for b in builder()])
         self.feature_info = builder.features
         head_chs = builder.in_chs
@@ -126,58 +73,25 @@ class EfficientNet(Module):
         return x
 
 
-def _gen_efficientnet(variant, feat_multiplier=1.0, depth_multiplier=1.0, pretrained=False, **kwargs):
-    """Creates an EfficientNet model.
+def create_model(variant, pretrained=False, **kwargs):
+    model_cfg = get_model_cfg(variant)
+    model_args = model_cfg['arch_fn'](variant, **model_cfg['arch_cfg'])
+    model_args.update(kwargs)
 
-    Ref impl: https://github.com/tensorflow/tpu/blob/master/models/official/efficientnet/efficientnet_model.py
-    Paper: https://arxiv.org/abs/1905.11946
+    # resolve some special layers and their arguments
+    se_args = model_args.pop('se_cfg', {})  # not consumable by model
+    if 'se_layer' not in model_args:
+        model_args['se_layer'] = partial(SqueezeExcite, **se_args)
 
-    EfficientNet params
-    name: (feat_multiplier, depth_multiplier, resolution, dropout_rate)
-    'efficientnet-b0': (1.0, 1.0, 224, 0.2),
-    'efficientnet-b1': (1.0, 1.1, 240, 0.2),
-    'efficientnet-b2': (1.1, 1.2, 260, 0.3),
-    'efficientnet-b3': (1.2, 1.4, 300, 0.3),
-    'efficientnet-b4': (1.4, 1.8, 380, 0.4),
-    'efficientnet-b5': (1.6, 2.2, 456, 0.4),
-    'efficientnet-b6': (1.8, 2.6, 528, 0.5),
-    'efficientnet-b7': (2.0, 3.1, 600, 0.5),
-    'efficientnet-b8': (2.2, 3.6, 672, 0.5),
-    'efficientnet-l2': (4.3, 5.3, 800, 0.5),
+    bn_args = model_args.pop('bn_cfg')  # not consumable by model
+    if 'norm_layer' not in model_args:
+        model_args['norm_layer'] = partial(BatchNorm2d, **bn_args)
 
-    Args:
-      feat_multiplier: multiplier to number of channels per layer
-      depth_multiplier: multiplier to number of repeats per stage
+    model_args['act_fn'] = get_act_fn(model_args.pop('act_fn'))  # convert str -> fn
 
-    """
-    arch_def = [
-        ['ds_r1_k3_s1_e1_c16_se0.25'],
-        ['ir_r2_k3_s2_e6_c24_se0.25'],
-        ['ir_r2_k5_s2_e6_c40_se0.25'],
-        ['ir_r3_k3_s2_e6_c80_se0.25'],
-        ['ir_r3_k5_s1_e6_c112_se0.25'],
-        ['ir_r4_k5_s2_e6_c192_se0.25'],
-        ['ir_r1_k3_s1_e6_c320_se0.25'],
-    ]
-    model_kwargs = dict(
-        block_args=decode_arch_def(arch_def, depth_multiplier),
-        num_features=round_channels(1280, feat_multiplier, 8, None),
-        stem_chs=32,
-        feat_multiplier=feat_multiplier,
-        act_fn=kwargs.pop('act_fn', jnnf.silu),
-        **kwargs,
-    )
-    model = EfficientNet(**model_kwargs)
+    model = EfficientNet(**model_args)
+
+    if pretrained:
+        load_pretrained(model)
+
     return model
-
-
-def pt_efficientnet_b0(pretrained=False, **kwargs):
-    norm_layer = partial(BatchNorm2d, eps=1e-5)
-    return _gen_efficientnet(
-        'efficientnet_b0', pretrained=pretrained, pad_type='LIKE', norm_layer=norm_layer, **kwargs)
-
-
-def tf_efficientnet_b0(pretrained=False, **kwargs):
-    norm_layer = partial(BatchNorm2d, eps=1e-3)
-    return _gen_efficientnet(
-        'tf_efficientnet_b0', pretrained=pretrained, pad_type='SAME', norm_layer=norm_layer, **kwargs)

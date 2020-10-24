@@ -47,6 +47,7 @@ class Conv2d(Module):
         assert out_channels % groups == 0, 'out_chs should be divisible by groups'
         kernel_size = util.to_tuple(kernel_size, 2)
         self.weight = TrainVar(kernel_init((out_channels, in_channels // groups, *kernel_size)))  # OIHW
+        #self.weight = TrainVar(kernel_init((*kernel_size, in_channels // groups, out_channels)))  # OIHW
         self.bias = TrainVar(bias_init((out_channels,))) if bias else None
         self.strides = util.to_tuple(stride, 2)
         self.dilations = util.to_tuple(dilation, 2)
@@ -94,11 +95,13 @@ class Linear(Module):
         """
         super().__init__()
         self.weight = TrainVar(weight_init((out_features, in_features)))
+        #self.weight = TrainVar(weight_init((in_features, out_features)))
         self.bias = TrainVar(bias_init(out_features)) if bias else None
 
     def __call__(self, x: JaxArray) -> JaxArray:
         """Returns the results of applying the linear transformation to input x."""
         y = jnp.dot(x, self.weight.value.transpose())
+        #y = jnp.dot(x, self.weight.value)
         if self.bias:
             y += self.bias.value
         return y

@@ -9,7 +9,7 @@ import jax.numpy as jnp
 
 import jeffnet.data.tf_imagenet_data as imagenet_data
 from jeffnet.common import load_state_dict, split_state_dict, correct_topk, AverageMeter
-from jeffnet.linen import tf_efficientnet_b0, pt_efficientnet_b0
+from jeffnet.linen import tf_efficientnet_b0, pt_efficientnet_b0, create_model
 
 
 def eval_forward(model, variables, images, labels):
@@ -22,9 +22,9 @@ def validate(args):
     rng = jax.random.PRNGKey(0)
     img_size = 224
     input_shape = (1, img_size, img_size, 3)
-    model = tf_efficientnet_b0()
+    model = create_model('tf_efficientnet_b0') #tf_efficientnet_b0()
 
-    state_dict = load_state_dict('./tf_efficientnet_b0.npz', transpose=True)
+    state_dict = load_state_dict('./tf_efficientnet_b0_ns.npz', transpose=True)
     source_params, source_state = split_state_dict(state_dict)
 
     def _init_model():
@@ -49,6 +49,10 @@ def validate(args):
         eval_step = lambda images, labels: eval_forward(model, variables, images, labels)
     else:
         eval_step = jax.jit(lambda images, labels: eval_forward(model, variables, images, labels))
+
+    #jax.make_jaxpr(model.apply)(variables, jnp.ones(input_shape, jnp.float32), training=False)
+    #blah = jax.make_jaxpr(eval_step)(jnp.ones(input_shape, jnp.float32), jnp.ones(1, jnp.int32))
+    #print(blah)
 
     """Runs evaluation and returns top-1 accuracy."""
     test_ds, num_batches = imagenet_data.load(

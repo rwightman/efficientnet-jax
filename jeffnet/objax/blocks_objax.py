@@ -6,10 +6,11 @@ from typing import Union, Callable, Optional
 
 import objax.nn as nn
 import objax.functional as F
-from objax import Module
+from objax import Module, nn as nn, functional as F
+from objax.typing import JaxArray
 
-from jeffnet.common.block_defs import *
-from .layers import Conv2d, BatchNorm2d, drop_path, get_act_fn
+from jeffnet.common.block_utils import *
+from .layers import Conv2d, BatchNorm2d, drop_path, get_act_fn, Linear
 
 
 class SqueezeExcite(Module):
@@ -207,6 +208,56 @@ class EdgeResidual(Module):
                 x = drop_path(x, drop_prob=self.drop_path_rate)
             x = x + shortcut
 
+        return x
+
+
+class EfficientHead(Module):
+    """ EfficientHead from MobileNetV3 """
+    def __init__(self, in_chs: int, num_features: int, num_classes: int=1000, global_pool='avg',
+                 act_fn='relu', norm_layer=BatchNorm2d, norm_kwargs=None):
+        norm_kwargs = norm_kwargs or {}
+        self.global_pool = global_pool
+
+        self.conv_1x1 = Conv2d(in_chs, num_features, 1)
+        self.bn = norm_layer(num_features, **norm_kwargs)
+        self.act_fn = act_fn
+        if num_classes > 0:
+            self.classifier = nn.Linear(num_features, num_classes, use_bias=True)
+        else:
+            self.classifier = None
+
+    def __call__(self, x: JaxArray, training: bool) -> JaxArray:
+        if self.global_pool == 'avg':
+            x = x.mean((2, 3))
+        x = self.conv_1x1(x)
+        x = self.bn(x, training=training)
+        x = self.act_fn(x)
+        x = self.classifier(x)
+        return x
+
+
+class Head(Module):
+    """ Standard Head from EfficientNet, MixNet, MNasNet, MobileNetV2, etc. """
+    def __init__(self, in_chs: int, num_features: int, num_classes: int = 1000, global_pool='avg',
+                 act_fn=F.relu, conv_layer=Conv2d, norm_layer=BatchNorm2d):
+        self.global_pool = global_pool
+
+        self.conv_1x1 = conv_layer(in_chs, num_features, 1)
+        self.bn = norm_layer(num_features)
+        self.act_fn = act_fn
+        if num_classes > 0:
+            self.classifier = Linear(num_features, num_classes, bias=True)
+        else:
+            self.classifier = None
+
+    def __call__(self, x: JaxArray, training: bool) -> JaxArray:
+        x = self.conv_1x1(x)
+        x = self.bn(x, training=training)
+        x = self.act_fn(x)
+        if self.global_pool == 'avg':
+            x = x.mean((2, 3))
+        if self.classifier is not None:
+            x = self.classifier(x)
         return x
 
 
