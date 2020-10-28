@@ -36,12 +36,12 @@ def create_conv(in_channels, out_channels, kernel_size, conv_layer=None, **kwarg
 
 class SqueezeExcite(Module):
     def __init__(self, in_chs, se_ratio=0.25, block_chs=None, reduce_from_block=True,
-                 conv_layer=Conv2d, act_fn=F.relu, gate_fn=F.sigmoid, divisor=1, **_):
+                 conv_layer=Conv2d, act_fn=F.relu, bound_act_fn=None, gate_fn=F.sigmoid, divisor=1):
         super(SqueezeExcite, self).__init__()
         base_features = block_chs if block_chs and reduce_from_block else in_chs
         reduced_chs = make_divisible(base_features * se_ratio, divisor)
         self.reduce = conv_layer(in_chs, reduced_chs, 1, bias=True)
-        self.act_fn = act_fn
+        self.act_fn = bound_act_fn if bound_act_fn is not None else act_fn
         self.expand = conv_layer(reduced_chs, in_chs, 1, bias=True)
         self.gate_fn = gate_fn
 
@@ -235,22 +235,20 @@ class EdgeResidual(Module):
 class EfficientHead(Module):
     """ EfficientHead from MobileNetV3 """
     def __init__(self, in_chs: int, num_features: int, num_classes: int = 1000, global_pool: str = 'avg',
-                 act_fn='relu', norm_layer=BatchNorm2d):
+                 act_fn='relu', conv_layer=Conv2d, norm_layer=None):
         self.global_pool = global_pool  # FIXME support diff pooling
 
-        self.conv_pw = Conv2d(in_chs, num_features, 1)
-        self.bn = norm_layer(num_features)
+        self.conv_pw = conv_layer(in_chs, num_features, 1, bias=True)
         self.act_fn = act_fn
         if num_classes > 0:
-            self.classifier = nn.Linear(num_features, num_classes, use_bias=True)
+            self.classifier = Linear(num_features, num_classes, bias=True)
         else:
             self.classifier = None
 
     def __call__(self, x: JaxArray, training: bool) -> JaxArray:
         if self.global_pool == 'avg':
-            x = x.mean((2, 3))
-        x = self.conv_pw(x)
-        x = self.bn(x, training=training)
+            x = x.mean((2, 3), keepdims=True)
+        x = self.conv_pw(x).reshape(x.shape[0], -1)
         x = self.act_fn(x)
         x = self.classifier(x)
         return x
@@ -302,7 +300,7 @@ class BlockFactory:
     @staticmethod
     def ConvBnAct(stage_idx, block_idx, **block_args):
         block_args.pop('drop_path_rate', None)
-        block_args.pop('se_kwargs', None)
+        block_args.pop('se_layer', None)
         return ConvBnAct(**block_args)
 
     @staticmethod

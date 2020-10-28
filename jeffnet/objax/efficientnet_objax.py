@@ -15,7 +15,7 @@ from jeffnet.common import get_model_cfg, round_features, decode_arch_def, Effic
 
 from .helpers import load_pretrained
 from .layers import Conv2d, BatchNorm2d, get_act_fn
-from .blocks_objax import ConvBnAct, SqueezeExcite, BlockFactory, Head
+from .blocks_objax import ConvBnAct, SqueezeExcite, BlockFactory, Head, EfficientHead
 
 
 class EfficientNet(Module):
@@ -35,8 +35,8 @@ class EfficientNet(Module):
                  num_classes: int = 1000, num_features: int = 1280, drop_rate: float = 0., global_pool: str = 'avg',
                  feat_multiplier: float = 1.0, feat_divisor: int = 8, feat_min: Optional[int] = None,
                  in_chs: int = 3, stem_size: int = 32, fix_stem: bool = False, output_stride: int = 32,
-                 pad_type: str ='LIKE', conv_layer=Conv2d, norm_layer=BatchNorm2d, se_layer=SqueezeExcite,
-                 act_fn=F.relu, drop_path_rate: float = 0.):
+                 efficient_head: bool = False, pad_type: str ='LIKE', conv_layer=Conv2d, norm_layer=BatchNorm2d,
+                 se_layer=SqueezeExcite, act_fn=F.relu, drop_path_rate: float = 0.):
         super(EfficientNet, self).__init__()
 
         self.num_classes = num_classes
@@ -59,7 +59,8 @@ class EfficientNet(Module):
         head_chs = builder.in_chs
 
         # Head (1x1 conv + pooling + classifier)
-        self.head = Head(head_chs, self.num_features, self.num_classes, global_pool=global_pool, **cba_kwargs)
+        head_layer = EfficientHead if efficient_head else Head
+        self.head = head_layer(head_chs, self.num_features, self.num_classes, global_pool=global_pool, **cba_kwargs)
 
         # how to init?
 
@@ -85,6 +86,10 @@ def create_model(variant, pretrained=False, **kwargs):
     # resolve some special layers and their arguments
     se_args = model_args.pop('se_cfg', {})  # not consumable by model
     if 'se_layer' not in model_args:
+        if 'bound_act_fn' in se_args:
+            se_args['bound_act_fn'] = get_act_fn(se_args['bound_act_fn'])
+        if 'gate_fn' in se_args:
+            se_args['gate_fn'] = get_act_fn(se_args['gate_fn'])
         model_args['se_layer'] = partial(SqueezeExcite, **se_args)
 
     bn_args = model_args.pop('bn_cfg')  # not consumable by model

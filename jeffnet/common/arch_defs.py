@@ -636,7 +636,7 @@ def arch_mobilenet_v3(variant, feat_multiplier=1.0, **kwargs):
         stem_size=16,
         feat_multiplier=feat_multiplier,
         act_fn=act_fn,
-        se_cfg=dict(bound_act_fn='relu', gate_fn='hard_sigmoid', reduce_from_block=True, divisor=8),
+        se_cfg=dict(bound_act_fn='relu', gate_fn='hard_sigmoid', reduce_from_block=False, divisor=8),
         efficient_head=True,
         **kwargs,
     )
