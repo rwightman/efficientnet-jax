@@ -1,3 +1,6 @@
+""" Activation Factory
+Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
+"""
 import flax.linen as nn
 import jax.nn as jnn
 from functools import partial

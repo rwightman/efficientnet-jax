@@ -1,4 +1,4 @@
-""" EfficientNet, MobileNetV3, etc Blocks
+""" EfficientNet, MobileNetV3, etc Blocks for Flax Linen
 
 Hacked together by / Copyright 2020 Ross Wightman
 """
@@ -7,9 +7,30 @@ from typing import Any, Callable, Union, Optional
 from flax import linen as nn
 
 from jeffnet.common.block_utils import *
-from .layers import conv2d, batchnorm2d, drop_path, get_act_fn, linear
+from .layers import conv2d, batchnorm2d, drop_path, get_act_fn, linear, MixedConv
 
 ModuleDef = Any
+
+
+def create_conv(features, kernel_size, conv_layer=None, **kwargs):
+    """ Select a convolution implementation based on arguments
+    Creates and returns one of Conv, MixedConv, or CondConv (TODO)
+    """
+    conv_layer = conv2d if conv_layer is None else conv_layer
+    if isinstance(kernel_size, list):
+        assert 'num_experts' not in kwargs  # MixNet + CondConv combo not supported currently
+        assert 'groups' not in kwargs  # MixedConv groups are defined by kernel list
+        # We're going to use only lists for defining the MixedConv2d kernel groups,
+        # ints, tuples, other iterables will continue to pass to normal conv and specify h, w.
+        m = MixedConv(features, kernel_size, conv_layer=conv_layer, **kwargs)
+    else:
+        depthwise = kwargs.pop('depthwise', False)
+        groups = features if depthwise else kwargs.pop('groups', 1)
+        # if 'num_experts' in kwargs and kwargs['num_experts'] > 0:
+        #     m = CondConv(features, kernel_size, groups=groups, conv_layer=conv_layer, **kwargs)
+        # else:
+        m = conv_layer(features, kernel_size, groups=groups, **kwargs)
+    return m
 
 
 class SqueezeExcite(nn.Module):
@@ -21,6 +42,7 @@ class SqueezeExcite(nn.Module):
 
     conv_layer: ModuleDef = conv2d
     act_fn: Callable = nn.relu
+    bound_act_fn: Optional[Callable] = None  # override the passed in act_fn from parent with a bound fn
     gate_fn: Callable = nn.sigmoid
 
     @nn.compact
@@ -28,9 +50,10 @@ class SqueezeExcite(nn.Module):
         x_se = x.mean((1, 2), keepdims=True)
         base_features = self.block_features if self.block_features and self.reduce_from_block else self.num_features
         reduce_features: int = make_divisible(base_features * self.se_ratio, self.divisor)
-        x_se = self.conv_layer(reduce_features, 1, stride=1, bias=True, name='fc1')(x_se)
-        x_se = self.act_fn(x_se)
-        x_se = self.conv_layer(self.num_features, 1, stride=1, bias=True, name='fc2')(x_se)
+        act_fn = self.bound_act_fn if self.bound_act_fn is not None else self.act_fn
+        x_se = self.conv_layer(reduce_features, 1, stride=1, bias=True, name='reduce')(x_se)
+        x_se = act_fn(x_se)
+        x_se = self.conv_layer(self.num_features, 1, stride=1, bias=True, name='expand')(x_se)
         return x * self.gate_fn(x_se)
 
 
@@ -83,9 +106,9 @@ class DepthwiseSeparable(nn.Module):
     def __call__(self, x, training: bool):
         shortcut = x
 
-        x = self.conv_layer(
+        x = create_conv(
             self.in_features, self.dw_kernel_size, stride=self.stride, dilation=self.dilation,
-            padding=self.pad_type, groups=self.in_features, name='conv_dw')(x)
+            padding=self.pad_type, depthwise=True, conv_layer=self.conv_layer, name='conv_dw')(x)
         x = self.norm_layer(name='bn_dw', training=training)(x)
         x = self.act_fn(x)
 
@@ -93,7 +116,9 @@ class DepthwiseSeparable(nn.Module):
             x = self.se_layer(
                 num_features=self.in_features, se_ratio=self.se_ratio, act_fn=self.act_fn, name='se')(x)
 
-        x = self.conv_layer(self.out_features, self.pw_kernel_size, padding=self.pad_type, name='conv_pw')(x)
+        x = create_conv(
+            self.out_features, self.pw_kernel_size, padding=self.pad_type,
+            conv_layer=self.conv_layer, name='conv_pw')(x)
         x = self.norm_layer(name='bn_pw', training=training)(x)
         if self.pw_act:
             x = self.act_fn(x)
@@ -117,7 +142,6 @@ class InvertedResidual(nn.Module):
     dilation: int = 1
     pad_type: str = 'LIKE'
     noskip: bool = False
-    pw_act: bool = False
     exp_ratio: float = 1.0
     se_ratio: float = 0.
     drop_path_rate: float = 0.
@@ -135,13 +159,14 @@ class InvertedResidual(nn.Module):
 
         # Point-wise expansion
         if self.exp_ratio > 1.:
-            x = self.conv_layer(features, self.exp_kernel_size, padding=self.pad_type, name='conv_exp')(x)
+            x = create_conv(
+                features, self.exp_kernel_size, padding=self.pad_type, conv_layer=self.conv_layer, name='conv_exp')(x)
             x = self.norm_layer(name='bn_exp', training=training)(x)
             x = self.act_fn(x)
 
-        x = self.conv_layer(
+        x = create_conv(
             features, self.dw_kernel_size, stride=self.stride, dilation=self.dilation,
-            padding=self.pad_type, groups=features, name='conv_dw')(x)
+            padding=self.pad_type, depthwise=True, conv_layer=self.conv_layer, name='conv_dw')(x)
         x = self.norm_layer(name='bn_dw', training=training)(x)
         x = self.act_fn(x)
 
@@ -150,8 +175,10 @@ class InvertedResidual(nn.Module):
                 num_features=features, block_features=self.in_features, se_ratio=self.se_ratio,
                 act_fn=self.act_fn, name='se')(x)
 
-        x = self.conv_layer(self.out_features, self.pw_kernel_size, padding=self.pad_type, name='conv_pw')(x)
-        x = self.norm_layer(name='bn_pw', training=training)(x)
+        x = create_conv(
+            self.out_features, self.pw_kernel_size, padding=self.pad_type,
+            conv_layer=self.conv_layer, name='conv_pwl')(x)
+        x = self.norm_layer(name='bn_pwl', training=training)(x)
 
         if (self.stride == 1 and self.in_features == self.out_features) and not self.noskip:
             if self.drop_path_rate > 0.:
@@ -171,7 +198,6 @@ class EdgeResidual(nn.Module):
     dilation: int = 1
     pad_type: str = 'LIKE'
     noskip: bool = False
-    pw_act: bool = False
     exp_ratio: float = 1.0
     se_ratio: float = 0.
     drop_path_rate: float = 0.
@@ -185,10 +211,12 @@ class EdgeResidual(nn.Module):
     def __call__(self, x, training: bool):
         shortcut = x
 
-        features = make_divisible(self.in_features * self.exp_ratio)
+        # Unlike other blocks, not using the arch def for in_features since it's not reliable for Edge
+        features = make_divisible(x.shape[-1] * self.exp_ratio)
 
         # Point-wise expansion
-        x = self.conv_layer(features, self.exp_kernel_size, padding=self.pad_type, name='conv_exp')(x)
+        x = create_conv(
+            features, self.exp_kernel_size, padding=self.pad_type, conv_layer=self.conv_layer, name='conv_exp')(x)
         x = self.norm_layer(name='bn_exp', training=training)(x)
         x = self.act_fn(x)
 
@@ -197,8 +225,10 @@ class EdgeResidual(nn.Module):
                 num_features=features, block_features=self.in_features, se_ratio=self.se_ratio,
                 act_fn=self.act_fn, name='se')(x)
 
-        x = self.conv_layer(self.out_features, self.pw_kernel_size, padding=self.pad_type, name='conv_pw')(x)
-        x = self.norm_layer(name='bn_pw', training=training)(x)
+        x = create_conv(
+            self.out_features, self.pw_kernel_size, stride=self.stride, dilation=self.dilation,
+            padding=self.pad_type, conv_layer=self.conv_layer, name='conv_pwl')(x)
+        x = self.norm_layer(name='bn_pwl', training=training)(x)
 
         if (self.stride == 1 and self.in_features == self.out_features) and not self.noskip:
             if self.drop_path_rate > 0.:
@@ -211,7 +241,7 @@ class Head(nn.Module):
     """ Standard Head from EfficientNet, MixNet, MNasNet, MobileNetV2, etc. """
     num_features: int
     num_classes: int = 1000
-    global_pool: str = 'avg'
+    global_pool: str = 'avg'  # FIXME support diff pooling
     drop_rate: float = 0.
 
     conv_layer: ModuleDef = conv2d
@@ -221,11 +251,36 @@ class Head(nn.Module):
 
     @nn.compact
     def __call__(self, x, training: bool):
-        x = self.conv_layer(self.num_features, 1, name='conv1x1')(x)
+        x = self.conv_layer(self.num_features, 1, name='conv_pw')(x)
         x = self.norm_layer(name='bn', training=training)(x)
         x = self.act_fn(x)
         if self.global_pool == 'avg':
             x = x.mean((1, 2))
+        x = nn.Dropout(rate=self.drop_rate)(x, deterministic=not training)
+        if self.num_classes > 0:
+            x = self.linear_layer(self.num_classes, bias=True, name='classifier')(x)
+        return x
+
+
+class EfficientHead(nn.Module):
+    """ EfficientHead for MobileNetV3. """
+    num_features: int
+    num_classes: int = 1000
+    global_pool: str = 'avg'  # FIXME support diff pooling
+    drop_rate: float = 0.
+
+    conv_layer: ModuleDef = conv2d
+    norm_layer: ModuleDef = None  # ignored, to keep calling code clean
+    linear_layer: ModuleDef = linear
+    act_fn: Callable = nn.relu
+
+    @nn.compact
+    def __call__(self, x, training: bool):
+        if self.global_pool == 'avg':
+            x = x.mean((1, 2), keepdims=True)
+        x = self.conv_layer(self.num_features, 1, bias=True, name='conv_pw')(x)
+        x = self.act_fn(x)
+
         x = nn.Dropout(rate=self.drop_rate)(x, deterministic=not training)
         if self.num_classes > 0:
             x = self.linear_layer(self.num_classes, bias=True, name='classifier')(x)
@@ -245,30 +300,31 @@ def chan_to_features(kwargs):
 class BlockFactory:
 
     @staticmethod
-    def CondConv(block_idx, **block_args):
+    def CondConv(stage_idx, block_idx, **block_args):
         assert False, "Not currently impl"
 
     @staticmethod
-    def InvertedResidual(block_idx, **block_args):
+    def InvertedResidual(stage_idx, block_idx, **block_args):
         block_args = chan_to_features(block_args)
-        return InvertedResidual(**block_args, name=f'block{block_idx}')
+        return InvertedResidual(**block_args, name=f'blocks_{stage_idx}_{block_idx}')
 
     @staticmethod
-    def DepthwiseSeparable(block_idx, **block_args):
+    def DepthwiseSeparable(stage_idx, block_idx, **block_args):
         block_args = chan_to_features(block_args)
-        return DepthwiseSeparable(**block_args, name=f'block{block_idx}')
+        return DepthwiseSeparable(**block_args, name=f'blocks_{stage_idx}_{block_idx}')
 
     @staticmethod
-    def EdgeResidual(block_idx, **block_args):
+    def EdgeResidual(stage_idx, block_idx, **block_args):
         block_args = chan_to_features(block_args)
-        return EdgeResidual(**block_args, name=f'block{block_idx}')
+        block_args.pop('fake_in_chs')  # not needed for Linen @nn.compact defs, we can access the real in_features
+        return EdgeResidual(**block_args, name=f'blocks_{stage_idx}_{block_idx}')
 
     @staticmethod
-    def ConvBnAct(block_idx, **block_args):
+    def ConvBnAct(stage_idx, block_idx, **block_args):
         block_args.pop('drop_path_rate', None)
         block_args.pop('se_layer', None)
         block_args = chan_to_features(block_args)
-        return ConvBnAct(**block_args, name=f'block{block_idx}')
+        return ConvBnAct(**block_args, name=f'blocks_{stage_idx}_{block_idx}')
 
     @staticmethod
     def get_act_fn(act_fn: Union[str, Callable]):

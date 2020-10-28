@@ -1,3 +1,7 @@
+""" BatchNorm Layer Wrapper
+
+Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
+"""
 from typing import Any, Callable, Tuple, Optional
 
 import flax.linen as nn
@@ -10,8 +14,8 @@ Array = Any
 
 
 def batchnorm2d(
-        eps=1e-05,
-        momentum=0.1,
+        eps=1e-3,
+        momentum=0.99,
         affine=True,
         training=True,
         name: Optional[str] = None,

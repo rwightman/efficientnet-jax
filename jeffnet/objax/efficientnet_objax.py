@@ -1,3 +1,7 @@
+""" EfficientNet (Objax) Model and Factory
+
+Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
+"""
 from typing import Optional
 from functools import partial
 
@@ -15,7 +19,7 @@ from .blocks_objax import ConvBnAct, SqueezeExcite, BlockFactory, Head
 
 
 class EfficientNet(Module):
-    """ EfficientNet
+    """ EfficientNet (and other MBConvNets)
       * EfficientNet B0-B8, L2
       * EfficientNet-EdgeTPU
       * EfficientNet-Lite
@@ -87,11 +91,12 @@ def create_model(variant, pretrained=False, **kwargs):
     if 'norm_layer' not in model_args:
         model_args['norm_layer'] = partial(BatchNorm2d, **bn_args)
 
-    model_args['act_fn'] = get_act_fn(model_args.pop('act_fn'))  # convert str -> fn
+    model_args['act_fn'] = get_act_fn(model_args.pop('act_fn', 'relu'))  # convert str -> fn
 
     model = EfficientNet(**model_args)
+    model.default_cfg = model_cfg['default_cfg']
 
     if pretrained:
-        load_pretrained(model)
+        load_pretrained(model, default_cfg=model.default_cfg)
 
     return model

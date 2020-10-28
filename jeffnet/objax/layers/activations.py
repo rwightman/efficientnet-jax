@@ -1,3 +1,6 @@
+""" Activation Factory
+Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
+"""
 import objax.functional as F
 import jax.nn as nn
 from functools import partial

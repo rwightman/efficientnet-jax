@@ -1,3 +1,6 @@
+""" Drop path layer
+Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
+"""
 from jax import lax
 from jax import random
 import jax.numpy as jnp
@@ -16,6 +19,7 @@ def drop_path(x, drop_prob: float = 0., rng=None):
     'survival rate' as the argument.
 
     """
+    # FIXME not tested
     if drop_prob == 0.:
         return x
     keep_prob = 1 - drop_prob

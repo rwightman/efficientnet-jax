@@ -1,4 +1,9 @@
-from typing import (Any, Callable, Sequence, Optional, Tuple, Union)
+""" Linear / Conv Layer Wrappers
+
+Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
+"""
+
+from typing import Any, Callable, Sequence, Optional, Tuple, Union
 
 import flax.linen as nn
 import flax.linen.initializers as initializers

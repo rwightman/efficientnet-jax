@@ -1,13 +1,16 @@
-import inspect
+""" Linear and Conv Layers
+
+Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
+"""
 from typing import Callable, Iterable, Tuple, Optional, Union
 
 from jax import numpy as jnp, lax
 
 from objax import functional, random, util
-from objax.module import ModuleList, Module
+from objax.module import Module
 from objax.nn.init import kaiming_normal, xavier_normal
 from objax.typing import JaxArray
-from objax.variable import TrainVar, StateVar
+from objax.variable import TrainVar
 
 from jeffnet.common.padding import get_like_padding
 
@@ -47,7 +50,6 @@ class Conv2d(Module):
         assert out_channels % groups == 0, 'out_chs should be divisible by groups'
         kernel_size = util.to_tuple(kernel_size, 2)
         self.weight = TrainVar(kernel_init((out_channels, in_channels // groups, *kernel_size)))  # OIHW
-        #self.weight = TrainVar(kernel_init((*kernel_size, in_channels // groups, out_channels)))  # OIHW
         self.bias = TrainVar(bias_init((out_channels,))) if bias else None
         self.strides = util.to_tuple(stride, 2)
         self.dilations = util.to_tuple(dilation, 2)
@@ -95,13 +97,11 @@ class Linear(Module):
         """
         super().__init__()
         self.weight = TrainVar(weight_init((out_features, in_features)))
-        #self.weight = TrainVar(weight_init((in_features, out_features)))
         self.bias = TrainVar(bias_init(out_features)) if bias else None
 
     def __call__(self, x: JaxArray) -> JaxArray:
         """Returns the results of applying the linear transformation to input x."""
         y = jnp.dot(x, self.weight.value.transpose())
-        #y = jnp.dot(x, self.weight.value)
         if self.bias:
             y += self.bias.value
         return y

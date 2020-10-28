@@ -1,3 +1,8 @@
+""" Architecture Definitions and Decoder
+
+Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
+"""
+
 import math
 import re
 from copy import deepcopy
@@ -74,7 +79,7 @@ def _decode_block_str(block_str):
     exp_kernel_size = _parse_ksize(options['a']) if 'a' in options else 1
     pw_kernel_size = _parse_ksize(options['p']) if 'p' in options else 1
     fake_in_chs = int(options['fc']) if 'fc' in options else 0  # FIXME hack to deal with in_chs issue in TPU def
-    se_ratio = float(options['se']) if 'se' in options else None
+    se_ratio = float(options['se']) if 'se' in options else 0.
     num_repeat = int(options['r'])
 
     # each type of block has different valid arguments, fill accordingly
@@ -631,7 +636,8 @@ def arch_mobilenet_v3(variant, feat_multiplier=1.0, **kwargs):
         stem_size=16,
         feat_multiplier=feat_multiplier,
         act_fn=act_fn,
-        se_cfg=dict(act_fn='relu', gate_fn='hard_sigmoid', reduce_mid=True, divisor=8),
+        se_cfg=dict(bound_act_fn='relu', gate_fn='hard_sigmoid', reduce_from_block=True, divisor=8),
+        efficient_head=True,
         **kwargs,
     )
     return model_kwargs

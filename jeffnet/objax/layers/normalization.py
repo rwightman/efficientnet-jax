@@ -1,15 +1,13 @@
+""" Normalization Layer Defs
+"""
 from typing import Callable, Iterable, Tuple, Optional, Union
 
-from jax import numpy as jnp, lax
+from jax import numpy as jnp
 
-from objax import functional, random, util
-from objax.module import ModuleList, Module
-from objax.nn.init import kaiming_normal, xavier_normal
+from objax import functional
+from objax.module import Module
 from objax.typing import JaxArray
 from objax.variable import TrainVar, StateVar
-
-
-import objax.nn as nn
 
 
 class _BatchNorm(Module):
@@ -20,7 +18,7 @@ class _BatchNorm(Module):
     <https://arxiv.org/abs/1502.03167>`_.
     """
 
-    def __init__(self, num_features: int, redux: Iterable[int], momentum: float = 0.999, eps: float = 1e-5):
+    def __init__(self, num_features: int, redux: Iterable[int], momentum: float = 0.9, eps: float = 1e-5):
         """Creates a BatchNorm module instance.
 
         Args:
@@ -54,14 +52,14 @@ class _BatchNorm(Module):
         weight = self.weight.value.reshape(shape)
         bias = self.bias.value.reshape(shape)
         if training:
-            m = x.mean(self.redux, keepdims=True)
-            v = (x ** 2).mean(self.redux, keepdims=True) - m ** 2
-            self.running_mean.value += (1 - self.momentum) * (m - self.running_mean.value.squeeze(axis=self.redux))
-            self.running_var.value += (1 - self.momentum) * (v - self.running_var.value.squeeze(axis=self.redux))
+            mean = x.mean(self.redux, keepdims=True)
+            var = (x ** 2).mean(self.redux, keepdims=True) - mean ** 2
+            self.running_mean.value += (1 - self.momentum) * (mean.squeeze(axis=self.redux) - self.running_mean.value)
+            self.running_var.value += (1 - self.momentum) * (var.squeeze(axis=self.redux) - self.running_var.value)
         else:
-            m, v = self.running_mean.value.reshape(shape), self.running_var.value.reshape(shape)
+            mean, var = self.running_mean.value.reshape(shape), self.running_var.value.reshape(shape)
 
-        y = weight * (x - m) * functional.rsqrt(v + self.eps) + bias
+        y = weight * (x - mean) * functional.rsqrt(var + self.eps) + bias
         return y
 
 
@@ -73,7 +71,7 @@ class BatchNorm1d(_BatchNorm):
     <https://arxiv.org/abs/1502.03167>`_.
     """
 
-    def __init__(self, num_features: int, momentum: float = 0.999, eps: float = 1e-5):
+    def __init__(self, num_features: int, momentum: float = 0.9, eps: float = 1e-5):
         """Creates a BatchNorm1D module instance.
 
         Args:
@@ -92,7 +90,7 @@ class BatchNorm2d(_BatchNorm):
     <https://arxiv.org/abs/1502.03167>`_.
     """
 
-    def __init__(self, num_features: int, momentum: float = 0.999, eps: float = 1e-5):
+    def __init__(self, num_features: int, momentum: float = 0.9, eps: float = 1e-5):
         """Creates a BatchNorm2D module instance.
 
         Args:

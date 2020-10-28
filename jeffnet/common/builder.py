@@ -58,8 +58,8 @@ class EfficientNetBuilder:
     def _round_channels(self, chs):
         return round_features(chs, self.feat_multiplier, self.feat_divisor, self.feat_min)
 
-    def _make_block(self, block_type, block_args, block_idx, block_count):
-        drop_path_rate = self.drop_path_rate * block_idx / block_count
+    def _make_block(self, block_type, block_args, stage_idx, block_idx, flat_idx, block_count):
+        drop_path_rate = self.drop_path_rate * flat_idx / block_count
         # NOTE: block act fn overrides the model default
         act_fn = block_args['act_fn'] if block_args['act_fn'] is not None else self.act_fn
         act_fn = self.block_factory.get_act_fn(act_fn)  # map string acts to functions
@@ -74,13 +74,13 @@ class EfficientNetBuilder:
 
         _log_info_if(f'  {block_type.upper()} {block_idx}, Args: {str(block_args)}', self.verbose)
         if block_type == 'ir':
-            block = self.block_factory.InvertedResidual(block_idx, **block_args)
+            block = self.block_factory.InvertedResidual(stage_idx, block_idx, **block_args)
         elif block_type == 'ds' or block_type == 'dsa':
-            block = self.block_factory.DepthwiseSeparable(block_idx, **block_args)
+            block = self.block_factory.DepthwiseSeparable(stage_idx, block_idx, **block_args)
         elif block_type == 'er':
-            block = self.block_factory.EdgeResidual(block_idx, **block_args)
+            block = self.block_factory.EdgeResidual(stage_idx, block_idx, **block_args)
         elif block_type == 'cn':
-            block = self.block_factory.ConvBnAct(block_idx, **block_args)
+            block = self.block_factory.ConvBnAct(stage_idx, block_idx, **block_args)
         else:
             assert False, 'Uknkown block type (%s) while building model.' % block_type
         self.in_chs = block_args['out_chs']  # update in_chs for arg of next block
@@ -90,11 +90,11 @@ class EfficientNetBuilder:
     def __call__(self):
         """ Build the blocks
         Return:
-             List of block stacks (each stack wrapped in nn.Sequential)
+             List of stages (each stage being a list of blocks)
         """
         _log_info_if('Building model trunk with %d stages...' % len(self.block_defs), self.verbose)
-        total_block_count = sum([len(x) for x in self.block_defs])
-        total_block_idx = 0
+        num_blocks = sum([len(x) for x in self.block_defs])
+        flat_idx = 0
         current_stride = 2
         current_dilation = 1
         stages = []
@@ -142,7 +142,7 @@ class EfficientNetBuilder:
                     current_dilation = next_dilation
 
                 # create the block
-                blocks.append(self._make_block(block_type, block_args, total_block_idx, total_block_count))
+                blocks.append(self._make_block(block_type, block_args, stage_idx, block_idx, flat_idx, num_blocks))
 
                 # stash feature module name and channel info for model feature extraction
                 # if extract_features:
@@ -152,6 +152,6 @@ class EfficientNetBuilder:
                 #     feature_info['module'] = '.'.join([module_name, leaf_name]) if leaf_name else module_name
                 #     self.features.append(feature_info)
 
-                total_block_idx += 1  # incr global block idx (across all stacks)
+                flat_idx += 1  # incr flattened block idx (across all stages)
             stages.append(blocks)
         return stages

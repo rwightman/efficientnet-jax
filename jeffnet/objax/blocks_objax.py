@@ -1,4 +1,4 @@
-""" EfficientNet, MobileNetV3, etc Blocks
+""" EfficientNet, MobileNetV3, etc Blocks for Objax
 
 Hacked together by / Copyright 2020 Ross Wightman
 """
@@ -10,7 +10,28 @@ from objax import Module, nn as nn, functional as F
 from objax.typing import JaxArray
 
 from jeffnet.common.block_utils import *
-from .layers import Conv2d, BatchNorm2d, drop_path, get_act_fn, Linear
+from .layers import Conv2d, MixedConv, BatchNorm2d, drop_path, get_act_fn, Linear
+
+
+def create_conv(in_channels, out_channels, kernel_size, conv_layer=None, **kwargs):
+    """ Select a convolution implementation based on arguments
+    Creates and returns one of Conv, MixedConv, or CondConv (TODO)
+    """
+    conv_layer = Conv2d if conv_layer is None else conv_layer
+    if isinstance(kernel_size, list):
+        assert 'num_experts' not in kwargs  # MixNet + CondConv combo not supported currently
+        assert 'groups' not in kwargs  # MixedConv groups are defined by kernel list
+        # We're going to use only lists for defining the MixedConv2d kernel groups,
+        # ints, tuples, other iterables will continue to pass to normal conv and specify h, w.
+        m = MixedConv(in_channels, out_channels, kernel_size, conv_layer=conv_layer, **kwargs)
+    else:
+        depthwise = kwargs.pop('depthwise', False)
+        groups = in_channels if depthwise else kwargs.pop('groups', 1)
+        # if 'num_experts' in kwargs and kwargs['num_experts'] > 0:
+        #     m = CondConv(in_channels, out_channels, kernel_size, groups=groups, conv_layer=conv_layer, **kwargs)
+        # else:
+        m = conv_layer(in_channels, out_channels, kernel_size, groups=groups, **kwargs)
+    return m
 
 
 class SqueezeExcite(Module):
@@ -19,16 +40,16 @@ class SqueezeExcite(Module):
         super(SqueezeExcite, self).__init__()
         base_features = block_chs if block_chs and reduce_from_block else in_chs
         reduced_chs = make_divisible(base_features * se_ratio, divisor)
-        self.fc1 = conv_layer(in_chs, reduced_chs, 1, bias=True)
+        self.reduce = conv_layer(in_chs, reduced_chs, 1, bias=True)
         self.act_fn = act_fn
-        self.fc2 = conv_layer(reduced_chs, in_chs, 1, bias=True)
+        self.expand = conv_layer(reduced_chs, in_chs, 1, bias=True)
         self.gate_fn = gate_fn
 
     def __call__(self, x):
         x_se = x.mean((2, 3), keepdims=True)
-        x_se = self.fc1(x_se)
+        x_se = self.reduce(x_se)
         x_se = self.act_fn(x_se)
-        x_se = self.fc2(x_se)
+        x_se = self.expand(x_se)
         return x * self.gate_fn(x_se)
 
 
@@ -61,8 +82,9 @@ class DepthwiseSeparable(Module):
         self.has_pw_act = pw_act  # activation after point-wise conv
         self.drop_path_rate = drop_path_rate
 
-        self.conv_dw = conv_layer(
-            in_chs, in_chs, dw_kernel_size, stride=stride, dilation=dilation, padding=pad_type, groups=in_chs)
+        self.conv_dw = create_conv(
+            in_chs, in_chs, dw_kernel_size, stride=stride, dilation=dilation,
+            padding=pad_type, depthwise=True, conv_layer=conv_layer)
         self.bn_dw = norm_layer(in_chs)
         self.act_fn = act_fn
 
@@ -71,7 +93,7 @@ class DepthwiseSeparable(Module):
         if se_layer is not None and se_ratio > 0.:
             self.se = se_layer(in_chs, se_ratio=se_ratio, act_fn=act_fn)
 
-        self.conv_pw = conv_layer(in_chs, out_chs, pw_kernel_size, padding=pad_type)
+        self.conv_pw = create_conv(in_chs, out_chs, pw_kernel_size, padding=pad_type, conv_layer=conv_layer)
         self.bn_pw = norm_layer(out_chs)
 
     def __call__(self, x, training: bool):
@@ -109,14 +131,14 @@ class InvertedResidual(Module):
         self.drop_path_rate = drop_path_rate
 
         # Point-wise expansion
-        self.conv_exp = conv_layer(in_chs, mid_chs, exp_kernel_size, padding=pad_type)
+        self.conv_exp = create_conv(in_chs, mid_chs, exp_kernel_size, padding=pad_type, conv_layer=conv_layer)
         self.bn_exp = norm_layer(mid_chs)
         self.act_fn = act_fn
 
         # Depth-wise convolution
-        self.conv_dw = conv_layer(
+        self.conv_dw = create_conv(
             mid_chs, mid_chs, dw_kernel_size, stride=stride, dilation=dilation,
-            padding=pad_type, groups=mid_chs)
+            padding=pad_type, depthwise=True, conv_layer=conv_layer)
         self.bn_dw = norm_layer(mid_chs)
 
         # Squeeze-and-excitation
@@ -125,8 +147,8 @@ class InvertedResidual(Module):
             self.se = se_layer(mid_chs, block_chs=in_chs, se_ratio=se_ratio, act_fn=act_fn)
 
         # Point-wise linear projection
-        self.conv_pw = conv_layer(mid_chs, out_chs, pw_kernel_size, padding=pad_type)
-        self.bn_pw = norm_layer(out_chs)
+        self.conv_pwl = create_conv(mid_chs, out_chs, pw_kernel_size, padding=pad_type, conv_layer=conv_layer)
+        self.bn_pwl = norm_layer(out_chs)
 
     def __call__(self, x, training: bool):
         shortcut = x
@@ -146,8 +168,8 @@ class InvertedResidual(Module):
             x = self.se(x)
 
         # Point-wise linear projection
-        x = self.conv_pw(x)
-        x = self.bn_pw(x, training=training)
+        x = self.conv_pwl(x)
+        x = self.bn_pwl(x, training=training)
 
         if self.has_residual:
             if training:
@@ -161,19 +183,17 @@ class EdgeResidual(Module):
     """ Residual block with expansion convolution followed by pointwise-linear w/ stride"""
 
     def __init__(self, in_chs, out_chs, exp_kernel_size=3, exp_ratio=1.0, fake_in_chs=0,
-                 stride=1, dilation=1, padding='LIKE', noskip=False, pw_kernel_size=1,
+                 stride=1, dilation=1, pad_type='LIKE', noskip=False, pw_kernel_size=1,
                  se_ratio=0., conv_layer=Conv2d, norm_layer=BatchNorm2d, se_layer=None, act_fn=F.relu,
                  drop_path_rate=0.):
         super(EdgeResidual, self).__init__()
-        if fake_in_chs > 0:
-            mid_chs = make_divisible(fake_in_chs * exp_ratio)
-        else:
-            mid_chs = make_divisible(in_chs * exp_ratio)
+        _in_chs = fake_in_chs if fake_in_chs > 0 else in_chs  # mismatch in arch specs and actual in chs
+        mid_chs = make_divisible(_in_chs * exp_ratio)
         self.has_residual = (in_chs == out_chs and stride == 1) and not noskip
         self.drop_path_rate = drop_path_rate
 
         # Expansion convolution
-        self.conv_exp = conv_layer(in_chs, mid_chs, exp_kernel_size, padding=padding)
+        self.conv_exp = create_conv(in_chs, mid_chs, exp_kernel_size, padding=pad_type, conv_layer=conv_layer)
         self.bn_exp = norm_layer(mid_chs)
         self.act_fn = act_fn
 
@@ -183,9 +203,10 @@ class EdgeResidual(Module):
             self.se = se_layer(mid_chs, block_chs=in_chs, se_ratio=se_ratio, act_fn=act_fn)
 
         # Point-wise linear projection
-        self.conv_pw = conv_layer(
-            mid_chs, out_chs, pw_kernel_size, stride=stride, dilation=dilation, padding=padding)
-        self.bn_pw = norm_layer(out_chs)
+        self.conv_pwl = create_conv(
+            mid_chs, out_chs, pw_kernel_size, stride=stride, dilation=dilation,
+            padding=pad_type, conv_layer=conv_layer)
+        self.bn_pwl = norm_layer(out_chs)
 
     def __call__(self, x, training: bool):
         shortcut = x
@@ -200,8 +221,8 @@ class EdgeResidual(Module):
             x = self.se(x)
 
         # Point-wise linear projection
-        x = self.conv_pw(x)
-        x = self.bn_pw(x, training=training)
+        x = self.conv_pwl(x)
+        x = self.bn_pwl(x, training=training)
 
         if self.has_residual:
             if training:
@@ -213,13 +234,12 @@ class EdgeResidual(Module):
 
 class EfficientHead(Module):
     """ EfficientHead from MobileNetV3 """
-    def __init__(self, in_chs: int, num_features: int, num_classes: int=1000, global_pool='avg',
-                 act_fn='relu', norm_layer=BatchNorm2d, norm_kwargs=None):
-        norm_kwargs = norm_kwargs or {}
-        self.global_pool = global_pool
+    def __init__(self, in_chs: int, num_features: int, num_classes: int = 1000, global_pool: str = 'avg',
+                 act_fn='relu', norm_layer=BatchNorm2d):
+        self.global_pool = global_pool  # FIXME support diff pooling
 
-        self.conv_1x1 = Conv2d(in_chs, num_features, 1)
-        self.bn = norm_layer(num_features, **norm_kwargs)
+        self.conv_pw = Conv2d(in_chs, num_features, 1)
+        self.bn = norm_layer(num_features)
         self.act_fn = act_fn
         if num_classes > 0:
             self.classifier = nn.Linear(num_features, num_classes, use_bias=True)
@@ -229,7 +249,7 @@ class EfficientHead(Module):
     def __call__(self, x: JaxArray, training: bool) -> JaxArray:
         if self.global_pool == 'avg':
             x = x.mean((2, 3))
-        x = self.conv_1x1(x)
+        x = self.conv_pw(x)
         x = self.bn(x, training=training)
         x = self.act_fn(x)
         x = self.classifier(x)
@@ -238,11 +258,11 @@ class EfficientHead(Module):
 
 class Head(Module):
     """ Standard Head from EfficientNet, MixNet, MNasNet, MobileNetV2, etc. """
-    def __init__(self, in_chs: int, num_features: int, num_classes: int = 1000, global_pool='avg',
+    def __init__(self, in_chs: int, num_features: int, num_classes: int = 1000, global_pool: str = 'avg',
                  act_fn=F.relu, conv_layer=Conv2d, norm_layer=BatchNorm2d):
-        self.global_pool = global_pool
+        self.global_pool = global_pool  # FIXME support diff pooling
 
-        self.conv_1x1 = conv_layer(in_chs, num_features, 1)
+        self.conv_pw = conv_layer(in_chs, num_features, 1)
         self.bn = norm_layer(num_features)
         self.act_fn = act_fn
         if num_classes > 0:
@@ -251,7 +271,7 @@ class Head(Module):
             self.classifier = None
 
     def __call__(self, x: JaxArray, training: bool) -> JaxArray:
-        x = self.conv_1x1(x)
+        x = self.conv_pw(x)
         x = self.bn(x, training=training)
         x = self.act_fn(x)
         if self.global_pool == 'avg':
@@ -264,23 +284,23 @@ class Head(Module):
 class BlockFactory:
 
     @staticmethod
-    def CondConv(**block_args):
+    def CondConv(stage_idx, block_idx, **block_args):
         assert False, "Not currently impl"
 
     @staticmethod
-    def InvertedResidual(block_idx, **block_args):
+    def InvertedResidual(stage_idx, block_idx, **block_args):
         return InvertedResidual(**block_args)
 
     @staticmethod
-    def DepthwiseSeparable(block_idx, **block_args):
+    def DepthwiseSeparable(stage_idx, block_idx, **block_args):
         return DepthwiseSeparable(**block_args)
 
     @staticmethod
-    def EdgeResidual(block_idx, **block_args):
+    def EdgeResidual(stage_idx, block_idx, **block_args):
         return EdgeResidual(**block_args)
 
     @staticmethod
-    def ConvBnAct(block_idx, **block_args):
+    def ConvBnAct(stage_idx, block_idx, **block_args):
         block_args.pop('drop_path_rate', None)
         block_args.pop('se_kwargs', None)
         return ConvBnAct(**block_args)

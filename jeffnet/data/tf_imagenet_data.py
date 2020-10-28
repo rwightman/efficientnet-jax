@@ -64,12 +64,15 @@ def load(
         split: Split,
         is_training: bool,
         batch_dims: Sequence[int],
+        image_size: int = IMAGE_SIZE,
         chw: bool = False,
-        mean: Tuple[int] = MEAN_RGB,
-        std: Tuple[int] = STDDEV_RGB,
+        mean: Optional[Tuple[float]] = None,
+        std: Optional[Tuple[float]] = None,
         interpolation: str = 'bicubic',
         tfds_data_dir: Optional[str] = None,
 ):
+    mean = MEAN_RGB if mean is None else mean
+    std = STDDEV_RGB if std is None else std
     """Loads the given split of the dataset."""
     if is_training:
         start, end = _shard(split, jax.host_id(), jax.host_count())
@@ -100,7 +103,8 @@ def load(
 
     interpolation = tf.image.ResizeMethod.BILINEAR if 'bilinear' in interpolation  else tf.image.ResizeMethod.BICUBIC
     def preprocess(example):
-        image = _preprocess_image(example['image'], is_training, mean=mean, std=std, interpolation=interpolation)
+        image = _preprocess_image(
+            example['image'], is_training, image_size=image_size, mean=mean, std=std, interpolation=interpolation)
         if chw:
             image = tf.transpose(image, (2, 0, 1))  # transpose HWC image to CHW format
         label = tf.cast(example['label'], tf.int32)
@@ -127,6 +131,7 @@ def normalize_image_for_view(image, mean=MEAN_RGB, std=STDDEV_RGB):
 def _preprocess_image(
         image_bytes: tf.Tensor,
         is_training: bool,
+        image_size: int = IMAGE_SIZE,
         mean=MEAN_RGB,
         std=STDDEV_RGB,
         interpolation=tf.image.ResizeMethod.BICUBIC,
@@ -136,12 +141,12 @@ def _preprocess_image(
         image = _decode_and_random_crop(image_bytes)
         image = tf.image.random_flip_left_right(image)
     else:
-        image = _decode_and_center_crop(image_bytes)
+        image = _decode_and_center_crop(image_bytes, image_size=image_size)
     assert image.dtype == tf.uint8
     # NOTE: Bicubic resize (1) casts uint8 to float32 and (2) resizes without
     # clamping overshoots. This means values returned will be outside the range
     # [0.0, 255.0].
-    image = tf.image.resize(image, [IMAGE_SIZE, IMAGE_SIZE], interpolation)
+    image = tf.image.resize(image, [image_size, image_size], interpolation)
     image = _normalize_image(image, mean=mean, std=std)
     return image
 
@@ -200,6 +205,7 @@ def _decode_and_random_crop(image_bytes: tf.Tensor) -> tf.Tensor:
 
 def _decode_and_center_crop(
         image_bytes: tf.Tensor,
+        image_size: int = 224,
         jpeg_shape: Optional[tf.Tensor] = None,
 ) -> tf.Tensor:
     """Crops to center of image with padding then scales."""
@@ -209,7 +215,7 @@ def _decode_and_center_crop(
     image_width = jpeg_shape[1]
 
     padded_center_crop_size = tf.cast(
-        ((IMAGE_SIZE / (IMAGE_SIZE + IMAGE_PADDING_FOR_CROP)) *
+        ((image_size / (image_size + IMAGE_PADDING_FOR_CROP)) *
          tf.cast(tf.minimum(image_height, image_width), tf.float32)), tf.int32)
 
     offset_height = ((image_height - padded_center_crop_size) + 1) // 2

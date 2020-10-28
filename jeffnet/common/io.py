@@ -1,3 +1,8 @@
+""" Numpy State Dict Helpers
+
+Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
+"""
+
 import numpy as np
 import jax.numpy as jnp
 

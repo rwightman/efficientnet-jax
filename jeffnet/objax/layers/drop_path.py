@@ -1,3 +1,6 @@
+""" Drop Path
+Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
+"""
 import jax.random as jr
 from objax import random
 from objax.typing import JaxArray
@@ -13,6 +16,7 @@ def drop_path(x: JaxArray, drop_prob: float = 0., generator=random.DEFAULT_GENER
     'survival rate' as the argument.
 
     """
+    # FIXME not tested
     if drop_prob == 0.:
         return x
     keep_prob = 1 - drop_prob

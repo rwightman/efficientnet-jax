@@ -1,66 +1,46 @@
+""" ImageNet Validation Script
+Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
+"""
 import time
 import argparse
-
-import flax
-from flax.core import FrozenDict, freeze, unfreeze
-from flax.traverse_util import flatten_dict, unflatten_dict
 import jax
-import jax.numpy as jnp
+import fnmatch
 
 import jeffnet.data.tf_imagenet_data as imagenet_data
-from jeffnet.common import load_state_dict, split_state_dict, correct_topk, AverageMeter
-from jeffnet.linen import tf_efficientnet_b0, pt_efficientnet_b0, create_model
+from jeffnet.common import correct_topk, AverageMeter, list_models, get_model_cfg
+from jeffnet.linen import create_model
 
 
-def eval_forward(model, variables, images, labels):
-    logits = model.apply(variables, images, mutable=False, training=False)
-    top1_count, top5_count = correct_topk(logits, labels, topk=(1, 5))
-    return top1_count, top5_count
+parser = argparse.ArgumentParser(description='PyTorch ImageNet Validation')
+parser.add_argument('data', metavar='DIR', help='path to dataset')
+parser.add_argument('--model', '-m', metavar='MODEL', default='tf_efficientnet_b0',
+                    help='model architecture (default: tf_efficientnet_b0)')
+parser.add_argument('-b', '--batch-size', default=250, type=int,
+                    metavar='N', help='mini-batch size (default: 256)')
+parser.add_argument('--no-jit', action='store_true', default=False,
+                    help='Disable jit of model (for comparison).')
 
 
 def validate(args):
     rng = jax.random.PRNGKey(0)
-    img_size = 224
-    input_shape = (1, img_size, img_size, 3)
-    model = create_model('tf_efficientnet_b0') #tf_efficientnet_b0()
 
-    state_dict = load_state_dict('./tf_efficientnet_b0_ns.npz', transpose=True)
-    source_params, source_state = split_state_dict(state_dict)
+    model, variables = create_model(args.model, pretrained=True, rng=rng)
+    print(f'Created {args.model} model. Validating...')
 
-    def _init_model():
-        var_init = model.init({'params': rng}, jnp.ones(input_shape, jnp.float32), training=False)
-        # FIXME this is all a rather large hack
-        var_unfrozen = unfreeze(var_init)
-        flat_params = flatten_dict(var_unfrozen['params'])
-        flat_state = flatten_dict(var_unfrozen['batch_stats'])
-        for ok, ov, sv in zip(flat_params.keys(), flat_params.values(), source_params.values()):
-            assert ov.shape == sv.shape
-            flat_params[ok] = sv
-        for ok, ov, sv in zip(flat_state.keys(), flat_state.values(), source_state.values()):
-            assert ov.shape == sv.shape
-            flat_state[ok] = sv
-        params = unflatten_dict(flat_params)
-        batch_stats = unflatten_dict(flat_state)
-        return dict(params=params, batch_stats=batch_stats)
-    variables = _init_model()
-
-    no_jit = False
-    if no_jit:
+    if args.no_jit:
         eval_step = lambda images, labels: eval_forward(model, variables, images, labels)
     else:
         eval_step = jax.jit(lambda images, labels: eval_forward(model, variables, images, labels))
 
-    #jax.make_jaxpr(model.apply)(variables, jnp.ones(input_shape, jnp.float32), training=False)
-    #blah = jax.make_jaxpr(eval_step)(jnp.ones(input_shape, jnp.float32), jnp.ones(1, jnp.int32))
-    #print(blah)
-
     """Runs evaluation and returns top-1 accuracy."""
+    image_size = model.default_cfg['input_size'][-1]
     test_ds, num_batches = imagenet_data.load(
         imagenet_data.Split.TEST,
         is_training=False,
+        image_size=image_size,
         batch_dims=[args.batch_size],
-        #mean=(255 * 0.5,) * 3,
-        #std=(255 * 0.5,) *3,
+        mean=tuple([x * 255 for x in model.default_cfg['mean']]),
+        std=tuple([x * 255 for x in model.default_cfg['std']]),
         tfds_data_dir=args.data)
 
     batch_time = AverageMeter()
@@ -90,10 +70,10 @@ def validate(args):
     return dict(top1=acc_1, top5=acc_5)
 
 
-parser = argparse.ArgumentParser(description='PyTorch ImageNet Validation')
-parser.add_argument('data', metavar='DIR', help='path to dataset')
-parser.add_argument('-b', '--batch-size', default=256, type=int,
-                    metavar='N', help='mini-batch size (default: 256)')
+def eval_forward(model, variables, images, labels):
+    logits = model.apply(variables, images, mutable=False, training=False)
+    top1_count, top5_count = correct_topk(logits, labels, topk=(1, 5))
+    return top1_count, top5_count
 
 
 def main():
@@ -101,8 +81,22 @@ def main():
     print('JAX host: %d / %d' % (jax.host_id(), jax.host_count()))
     print('JAX devices:\n%s' % '\n'.join(str(d) for d in jax.devices()), flush=True)
 
-    validate(args)
-
+    if get_model_cfg(args.model) is not None:
+        validate(args)
+    else:
+        models = list_models(pretrained=True)
+        if args.model != 'all':
+            models = fnmatch.filter(models, args.model)
+        print('Validating: ', ', '.join(models))
+        results = []
+        for m in models:
+            args.model = m
+            res = validate(args)
+            res.update(dict(model=m))
+            results.append(res)
+        print('Results:')
+        for r in results:
+            print(f"Model: {r['model']}, Top1: {r['top1']}, Top5: {r['top5']}")
 
 if __name__ == '__main__':
     main()

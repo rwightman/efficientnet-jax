@@ -1,41 +1,45 @@
+""" ImageNet Validation Script
+Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
+"""
 import time
 import argparse
+import fnmatch
 
 import jax
 from absl import logging
 
 import objax
 import jeffnet.data.tf_imagenet_data as imagenet_data
-from jeffnet.common import load_state_dict, correct_topk, AverageMeter
+from jeffnet.common import correct_topk, AverageMeter, get_model_cfg, list_models
 from jeffnet.objax import create_model
 
 
-def eval_forward(model, images, labels):
-    logits = model(images, training=False)
-    top1_count, top5_count = correct_topk(logits, labels, topk=(1, 5))
-    return top1_count, top5_count
+parser = argparse.ArgumentParser(description='PyTorch ImageNet Validation')
+parser.add_argument('data', metavar='DIR', help='path to dataset')
+parser.add_argument('--model', '-m', metavar='MODEL', default='tf_efficientnet_b0',
+                    help='model architecture (default: tf_efficientnet_b0)')
+parser.add_argument('-b', '--batch-size', default=250, type=int,
+                    metavar='N', help='mini-batch size (default: 256)')
 
 
 def validate(args):
-    model = create_model('tf_efficientnet_b0')
-    model_vars = model.vars()
-    jax_state_dict = load_state_dict('./tf_efficientnet_b0_ns.npz')
-
-    # FIXME hack, assuming alignment, currently enforced by my layer customizations
-    model_vars.assign(jax_state_dict.values())
+    model = create_model(args.model, pretrained=True)
+    print(f'Created {args.model} model. Validating...')
 
     eval_step = objax.Jit(
         lambda images, labels: eval_forward(model, images, labels),
         model.vars())
 
     """Runs evaluation and returns top-1 accuracy."""
+    image_size = model.default_cfg['input_size'][-1]
     test_ds, num_batches = imagenet_data.load(
         imagenet_data.Split.TEST,
         is_training=False,
+        image_size=image_size,
         batch_dims=[args.batch_size],
         chw=True,
-        #mean=(255 * 0.5,) * 3,
-        #std=(255 * 0.5,) *3,
+        mean=tuple([x * 255 for x in model.default_cfg['mean']]),
+        std=tuple([x * 255 for x in model.default_cfg['std']]),
         tfds_data_dir=args.data)
 
     batch_time = AverageMeter()
@@ -62,13 +66,13 @@ def validate(args):
     acc_5 = 100 * correct_top5 / total_examples
     print(f'Validation complete. {total_examples / (prev_time - start_time):>5.2f} img/s. '
           f'Acc@1 {acc_1:>7.3f}, Acc@5 {acc_5:>7.3f}')
-    return dict(top1=acc_1, top5=acc_5)
+    return dict(top1=float(acc_1), top5=float(acc_5))
 
 
-parser = argparse.ArgumentParser(description='PyTorch ImageNet Validation')
-parser.add_argument('data', metavar='DIR', help='path to dataset')
-parser.add_argument('-b', '--batch-size', default=256, type=int,
-                    metavar='N', help='mini-batch size (default: 256)')
+def eval_forward(model, images, labels):
+    logits = model(images, training=False)
+    top1_count, top5_count = correct_topk(logits, labels, topk=(1, 5))
+    return top1_count, top5_count
 
 
 def main():
@@ -77,7 +81,23 @@ def main():
     print('JAX host: %d / %d' % (jax.host_id(), jax.host_count()))
     print('JAX devices:\n%s' % '\n'.join(str(d) for d in jax.devices()), flush=True)
 
-    validate(args)
+    if get_model_cfg(args.model) is not None:
+        validate(args)
+    else:
+        models = list_models(pretrained=True)
+        if args.model != 'all':
+            models = fnmatch.filter(models, args.model)
+        print('Validating:', ', '.join(models))
+        results = []
+        for m in models:
+            args.model = m
+            res = validate(args)
+            res.update(dict(model=m))
+            results.append(res)
+        print('Results:')
+        for r in results:
+            print(f"Model: {r['model']}, Top1: {r['top1']}, Top5: {r['top5']}")
+
 
 
 if __name__ == '__main__':
