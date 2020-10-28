@@ -15,12 +15,12 @@ Where are we at:
 * Tensorflow and PyTorch data pipeline based validation scripts work with models and weights. For PT pipeline with PT models and TF pipeline with TF models the results are pretty much exact.
 
 TODO:
--[ ] Fixup model weight inits (not currently correct), fix dropout/drop path impl and other training specifics.
--[ ] Add more instructions / help in the README on how to get an optimal environment with JAX up and running (with GPU support)
--[ ] Add basic training code. The main point of this is to scale up training.
--[ ] Add more advance data augmentation pipeline 
--[ ] Training on lots of GPUs
--[ ] Training on lots of TPUs
+- [ ] Fixup model weight inits (not currently correct), fix dropout/drop path impl and other training specifics.
+- [ ] Add more instructions / help in the README on how to get an optimal environment with JAX up and running (with GPU support)
+- [ ] Add basic training code. The main point of this is to scale up training.
+- [ ] Add more advance data augmentation pipeline 
+- [ ] Training on lots of GPUs
+- [ ] Training on lots of TPUs
 
 Some odd things:
 * Objax layers are reimplemented to make my initial work easier, scratch some itches, make more consistent with PyTorch (because why not?)
