@@ -1,6 +1,6 @@
 # EfficientNet JAX - Flax Linen and Objax
 
-This is very much a giant steaming work in progress. The two JAX dressings I am using -- Objax, and Flax Linen -- are also shifting week to week. No effort will be made to maintain backwards compatibility with thece here. It will break.
+This is very much a giant steaming work in progress. The two JAX dressings I am using -- Objax (https://github.com/google/objax), and Flax Linen (https://github.com/google/flax/tree/master/flax/linen) -- are also shifting week to week. No effort will be made to maintain backwards compatibility with thece here. It will break.
 
 This is essentially an adaptation of my PyTorch EfficienNet generator code (https://github.com/rwightman/gen-efficientnet-pytorch and also found in https://github.com/rwightman/pytorch-image-models) to JAX.
 
