@@ -70,7 +70,7 @@ class Conv2d(Module):
         y = lax.conv_general_dilated(
             x, self.weight.value, self.strides, self.padding,
             rhs_dilation=self.dilations, feature_group_count=self.groups,
-            dimension_numbers=('NCHW', 'OIHW', 'NCHW'), precision=lax.Precision.HIGHEST)
+            dimension_numbers=('NCHW', 'OIHW', 'NCHW'))
         if self.bias:
             y += self.bias.value.reshape((1, -1, 1, 1))
         return y
