@@ -33,7 +33,7 @@ def load_pretrained(variables, url='', default_cfg=None, filter_fn=None):
             missing_keys.append(flat_k)
         flat_param_keys.add(flat_k)
     unexpected_keys = list(set(source_params.keys()).difference(flat_param_keys))
-    params = unflatten_dict(flat_params)
+    params = freeze(unflatten_dict(flat_params))
 
     flat_state = flatten_dict(var_unfrozen['batch_stats'])
     flat_state_keys = set()
@@ -46,7 +46,7 @@ def load_pretrained(variables, url='', default_cfg=None, filter_fn=None):
             missing_keys.append(flat_k)
         flat_state_keys.add(flat_k)
     unexpected_keys.extend(list(set(source_state.keys()).difference(flat_state_keys)))
-    batch_stats = unflatten_dict(flat_state)
+    batch_stats = freeze(unflatten_dict(flat_state))
 
     if missing_keys:
         print(f' WARNING: {len(missing_keys)} keys missing while loading state_dict. {str(missing_keys)}')
