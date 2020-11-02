@@ -30,7 +30,7 @@ class MixedConv(nn.Module):
     kernel_size: Union[List[int], int] = 3
     dilation: int = 1
     stride: int = 1
-    padding: Union[str, Tuple[int, int]] = 0,
+    padding: Union[str, Tuple[int, int]] = 0
     depthwise: bool = False
     bias: bool = False
 
