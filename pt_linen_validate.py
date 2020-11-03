@@ -96,6 +96,10 @@ def main():
         models = list_models(pretrained=True)
         if args.model != 'all':
             models = fnmatch.filter(models, args.model)
+        if not models:
+            print(f'ERROR: No models found to validate with pattern {args.model}.')
+            exit(1)
+
         print('Validating:', ', '.join(models))
         results = []
         for m in models:
