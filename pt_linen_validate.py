@@ -58,8 +58,8 @@ def validate(args):
         labels = labels.numpy()
 
         top1_count, top5_count = eval_step(images, labels)
-        correct_top1 += top1_count
-        correct_top5 += top5_count
+        correct_top1 += int(top1_count)
+        correct_top5 += int(top5_count)
         total_examples += images.shape[0]
 
         batch_time.update(time.time() - prev_time)
