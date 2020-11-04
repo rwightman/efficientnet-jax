@@ -40,13 +40,12 @@ class EfficientNet(nn.Module):
     fix_stem: bool = False
     pad_type: str = 'LIKE'
     output_stride: int = 32
-    efficient_head: bool = False
 
-    # classifier config
+    # classifier / head config
+    efficient_head: bool = False
     num_classes: int = 1000
     num_features: int = 1280
     global_pool: str = 'avg'
-    # output_stride: int = 32  # FIXME support variable output strides
 
     # regularization
     drop_rate: float = 0.

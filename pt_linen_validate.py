@@ -90,8 +90,24 @@ def main():
     print('JAX devices:\n%s' % '\n'.join(str(d) for d in jax.devices()), flush=True)
     jax.config.enable_omnistaging()
 
+    def _try_validate(args):
+        res = None
+        batch_size = args.batch_size
+        while res is None:
+            try:
+                print(f'Setting validation batch size to {batch_size}')
+                args.batch_size = batch_size
+                res = validate(args)
+            except RuntimeError as e:
+                if batch_size <= 1:
+                    print("Validation failed with no ability to reduce batch size. Exiting.")
+                    raise e
+                batch_size = max(batch_size // 2, 1)
+                print("Validation failed, reducing batch size by 50%")
+        return res
+
     if get_model_cfg(args.model) is not None:
-        validate(args)
+        _try_validate(args)
     else:
         models = list_models(pretrained=True)
         if args.model != 'all':
@@ -102,9 +118,11 @@ def main():
 
         print('Validating:', ', '.join(models))
         results = []
+        start_batch_size = args.batch_size
         for m in models:
+            args.batch_size = start_batch_size  # reset in case reduced for retry
             args.model = m
-            res = validate(args)
+            res = _try_validate(args)
             res.update(dict(model=m))
             results.append(res)
         print('Results:')

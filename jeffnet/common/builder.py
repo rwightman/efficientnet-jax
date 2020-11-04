@@ -34,6 +34,7 @@ class EfficientNetBuilder:
                  feat_multiplier=1.0, feat_divisor=8, feat_min=None,
                  output_stride=32, pad_type='', conv_layer=None, norm_layer=None, se_layer=None,
                  act_fn=None, drop_path_rate=0., feature_location='', verbose=False):
+        assert output_stride in (32, 16, 8, 4, 2)
         self.in_chs = in_chs  # num input ch from stem
         self.block_defs = block_defs  # block types, arguments w/ structure
         self.block_factory = block_factory  # factory to build framework specific blocks
