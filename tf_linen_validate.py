@@ -96,10 +96,9 @@ def create_eval_iter(data_dir, batch_size, image_size, half_precision=False,
     dataset_builder = tfds.builder('imagenet2012:5.*.*', data_dir=data_dir)
     assert dataset_builder.info.splits['validation'].num_examples % batch_size == 0
     num_batches = dataset_builder.info.splits['validation'].num_examples // batch_size
-    # FIXME currently forcing no host/device-split, I haven't added distributed eval support
     ds = input_pipeline.create_split(
         dataset_builder, batch_size, train=False, half_precision=half_precision,
-        image_size=image_size, mean=mean, std=std, interpolation=interpolation, no_split=True, no_repeat=True)
+        image_size=image_size, mean=mean, std=std, interpolation=interpolation, no_repeat=True)
     it = map(prepare_tf_data, ds)
     return it, num_batches
 

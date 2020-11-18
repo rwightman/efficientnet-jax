@@ -210,7 +210,6 @@ def create_split(
         std: Optional[Tuple[float]] = None,
         interpolation: str = 'bicubic',
         cache: bool = False,
-        no_split: bool = False,
         no_repeat: bool = False,
 ):
     """Creates a split from the ImageNet dataset using TensorFlow Datasets.
@@ -225,7 +224,7 @@ def create_split(
       std: image dataset std-dev
       interpolation: interpolation method to use for image resize (default: 'bicubic')
       cache: Whether to cache the dataset (default: False).
-      no_split: Force not splitting across hosts (no leading split/device dim)
+      no_repeat: disable repeat iter for evaluation
     Returns:
       A `tf.data.Dataset`.
     """
@@ -247,11 +246,9 @@ def create_split(
     else:
         data_size = dataset_builder.info.splits['validation'].num_examples
         split = 'validation'
-
-    if not no_split:
-        split_size = data_size // jax.host_count()
-        start = jax.host_id() * split_size
-        split = split + '[{}:{}]'.format(start, start + split_size)
+    split_size = data_size // jax.host_count()
+    start = jax.host_id() * split_size
+    split = split + '[{}:{}]'.format(start, start + split_size)
 
     def _decode_example(example):
         if train:

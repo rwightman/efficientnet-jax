@@ -380,6 +380,9 @@ def main(argv):
     if len(argv) > 1:
         raise app.UsageError('Too many command-line arguments.')
 
+    print('JAX host: %d / %d' % (jax.host_id(), jax.host_count()))
+    print('JAX devices:\n%s' % '\n'.join(str(d) for d in jax.devices()), flush=True)
+
     train_and_evaluate(model_dir=FLAGS.model_dir, config=FLAGS.config)
 
 
