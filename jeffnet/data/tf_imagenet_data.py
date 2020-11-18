@@ -1,3 +1,11 @@
+""" Tensorflow ImageNet Data Pipeline
+
+This code is based on an earlier version of
+https://github.com/google/objax/blob/master/examples/image_classification/imagenet_resnet50_data.py
+
+Original copyrights below. Modifications by Ross Wightman.
+"""
+
 # Copyright 2020 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -88,7 +96,7 @@ def load(
     total_batch_size = np.prod(batch_dims)
 
     options = ds.options()
-    options.experimental_threading.private_threadpool_size = 48
+    options.experimental_threading.private_threadpool_size = 16
     options.experimental_threading.max_intra_op_parallelism = 1
     if is_training:
         options.experimental_deterministic = False
@@ -102,6 +110,7 @@ def load(
     num_batches = split.num_examples // total_batch_size
 
     interpolation = tf.image.ResizeMethod.BILINEAR if 'bilinear' in interpolation  else tf.image.ResizeMethod.BICUBIC
+
     def preprocess(example):
         image = _preprocess_image(
             example['image'], is_training, image_size=image_size, mean=mean, std=std, interpolation=interpolation)
@@ -138,7 +147,7 @@ def _preprocess_image(
 ) -> tf.Tensor:
     """Returns processed and resized images."""
     if is_training:
-        image = _decode_and_random_crop(image_bytes)
+        image = _decode_and_random_crop(image_bytes, image_size=image_size)
         image = tf.image.random_flip_left_right(image)
     else:
         image = _decode_and_center_crop(image_bytes, image_size=image_size)
@@ -185,7 +194,7 @@ def _distorted_bounding_box_crop(
     return image
 
 
-def _decode_and_random_crop(image_bytes: tf.Tensor) -> tf.Tensor:
+def _decode_and_random_crop(image_bytes: tf.Tensor, image_size: int = 224) -> tf.Tensor:
     """Make a random crop of image."""
     jpeg_shape = tf.image.extract_jpeg_shape(image_bytes)
     bbox = tf.constant([0.0, 0.0, 1.0, 1.0], dtype=tf.float32, shape=[1, 1, 4])
@@ -199,7 +208,7 @@ def _decode_and_random_crop(image_bytes: tf.Tensor) -> tf.Tensor:
         max_attempts=10)
     if tf.reduce_all(tf.equal(jpeg_shape, tf.shape(image))):
         # If the random crop failed fall back to center crop.
-        image = _decode_and_center_crop(image_bytes, jpeg_shape)
+        image = _decode_and_center_crop(image_bytes, image_size=image_size, jpeg_shape=jpeg_shape)
     return image
 
 
@@ -215,7 +224,7 @@ def _decode_and_center_crop(
     image_width = jpeg_shape[1]
 
     padded_center_crop_size = tf.cast(
-        ((image_size / (image_size + IMAGE_PADDING_FOR_CROP)) *
+        (tf.cast(image_size / (image_size + IMAGE_PADDING_FOR_CROP), tf.float32) *
          tf.cast(tf.minimum(image_height, image_width), tf.float32)), tf.int32)
 
     offset_height = ((image_height - padded_center_crop_size) + 1) // 2

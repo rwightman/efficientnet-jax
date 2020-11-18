@@ -12,10 +12,11 @@ import jax.numpy as jnp
 
 from jeffnet.common import round_features, get_model_cfg, EfficientNetBuilder
 from .helpers import load_pretrained
-from .layers import conv2d, batchnorm2d, get_act_fn
+from .layers import conv2d, linear, batchnorm2d, get_act_fn
 from .blocks_linen import ConvBnAct, SqueezeExcite, BlockFactory, Head, EfficientHead
 
 ModuleDef = Any
+Dtype = Any
 
 
 class EfficientNet(nn.Module):
@@ -51,6 +52,7 @@ class EfficientNet(nn.Module):
     drop_rate: float = 0.
     drop_path_rate: float = 0.
 
+    dtype: Dtype = jnp.float32
     conv_layer: ModuleDef = conv2d
     norm_layer: ModuleDef = batchnorm2d
     se_layer: ModuleDef = SqueezeExcite
@@ -58,7 +60,15 @@ class EfficientNet(nn.Module):
 
     @nn.compact
     def __call__(self, x, training: bool):
-        lkwargs = dict(conv_layer=self.conv_layer, norm_layer=self.norm_layer, act_fn=self.act_fn)
+        # add dtype binding to layers
+        # FIXME is there better way to handle dtype? Passing dtype to all child Modules also seems messy...
+        lkwargs = dict(
+            conv_layer=partial(self.conv_layer, dtype=self.dtype),
+            norm_layer=partial(self.norm_layer, dtype=self.dtype),
+            act_fn=self.act_fn)
+        se_layer = partial(self.se_layer, dtype=self.dtype)
+        linear_layer = partial(linear, dtype=self.dtype)
+
         stem_features = self.stem_size
         if not self.fix_stem:
             stem_features = round_features(self.stem_size, self.feat_multiplier, self.feat_divisor, self.feat_min)
@@ -69,7 +79,7 @@ class EfficientNet(nn.Module):
         blocks = EfficientNetBuilder(
             stem_features, self.block_defs, BlockFactory(),
             feat_multiplier=self.feat_multiplier, feat_divisor=self.feat_divisor, feat_min=self.feat_min,
-            output_stride=self.output_stride, pad_type=self.pad_type, se_layer=self.se_layer, **lkwargs,
+            output_stride=self.output_stride, pad_type=self.pad_type, se_layer=se_layer, **lkwargs,
             drop_path_rate=self.drop_path_rate)()
         for stage in blocks:
             for block in stage:
@@ -77,8 +87,8 @@ class EfficientNet(nn.Module):
 
         head_layer = EfficientHead if self.efficient_head else Head
         x = head_layer(
-            num_features=self.num_features, num_classes=self.num_classes, **lkwargs,
-            drop_rate=self.drop_rate, name='head')(x, training=training)
+            num_features=self.num_features, num_classes=self.num_classes, drop_rate=self.drop_rate,
+            **lkwargs, dtype=self.dtype, linear_layer=linear_layer, name='head')(x, training=training)
         return x
 
 
@@ -121,9 +131,19 @@ def create_model(variant, pretrained=False, rng=None, input_shape=None, **kwargs
     model.default_cfg = model_cfg['default_cfg']
 
     rng = jax.random.PRNGKey(0) if rng is None else rng
+    params_rng, dropout_rng = jax.random.split(rng)
     input_shape = model_cfg['default_cfg']['input_size'] if input_shape is None else input_shape
     input_shape = (1, input_shape[1], input_shape[2], input_shape[0])   # CHW -> HWC by default
-    variables = model.init({'params': rng}, jnp.ones(input_shape, jnp.float32), training=True)
+
+    # FIXME is jiting the init worthwhile for my usage?
+    #     @jax.jit
+    #     def init(*args):
+    #         return model.init(*args, training=True)
+
+    variables = model.init(
+        {'params': params_rng, 'dropout': dropout_rng},
+        jnp.ones(input_shape, jnp.float32),
+        training=True)
 
     if pretrained:
         variables = load_pretrained(variables, default_cfg=model.default_cfg, filter_fn=_filter)

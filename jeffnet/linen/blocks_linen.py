@@ -5,10 +5,12 @@ Hacked together by / Copyright 2020 Ross Wightman
 from typing import Any, Callable, Union, Optional
 
 from flax import linen as nn
+import jax.numpy as jnp
 
 from jeffnet.common.block_utils import *
-from .layers import conv2d, batchnorm2d, drop_path, get_act_fn, linear, MixedConv
+from .layers import conv2d, batchnorm2d, get_act_fn, linear, DropPath, Dropout, MixedConv
 
+Dtype = Any
 ModuleDef = Any
 
 
@@ -40,6 +42,7 @@ class SqueezeExcite(nn.Module):
     divisor: int = 1
     reduce_from_block: bool = True  # calc se reduction from containing block's input features
 
+    dtype: Dtype = jnp.float32
     conv_layer: ModuleDef = conv2d
     act_fn: Callable = nn.relu
     bound_act_fn: Optional[Callable] = None  # override the passed in act_fn from parent with a bound fn
@@ -47,7 +50,9 @@ class SqueezeExcite(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        x_se = x.mean((1, 2), keepdims=True)
+        x_se = jnp.asarray(x, jnp.float32)
+        x_se = x_se.mean((1, 2), keepdims=True)
+        x_se = jnp.asarray(x_se, self.dtype)
         base_features = self.block_features if self.block_features and self.reduce_from_block else self.num_features
         reduce_features: int = make_divisible(base_features * self.se_ratio, self.divisor)
         act_fn = self.bound_act_fn if self.bound_act_fn is not None else self.act_fn
@@ -124,8 +129,7 @@ class DepthwiseSeparable(nn.Module):
             x = self.act_fn(x)
 
         if (self.stride == 1 and self.in_features == self.out_features) and not self.noskip:
-            if self.drop_path_rate > 0.:
-                x = drop_path(self.drop_path_rate, self.training)(x)
+            x = DropPath(self.drop_path_rate)(x, training=training)
             x = x + shortcut
         return x
 
@@ -181,8 +185,7 @@ class InvertedResidual(nn.Module):
         x = self.norm_layer(name='bn_pwl', training=training)(x)
 
         if (self.stride == 1 and self.in_features == self.out_features) and not self.noskip:
-            if self.drop_path_rate > 0.:
-                x = drop_path(x, self.drop_path_rate, self.training)
+            x = DropPath(self.drop_path_rate)(x, training=training)
             x = x + shortcut
         return x
 
@@ -231,8 +234,7 @@ class EdgeResidual(nn.Module):
         x = self.norm_layer(name='bn_pwl', training=training)(x)
 
         if (self.stride == 1 and self.in_features == self.out_features) and not self.noskip:
-            if self.drop_path_rate > 0.:
-                x = drop_path(x, self.drop_path_rate, training=training)
+            x = DropPath(self.drop_path_rate)(x, training=training)
             x = x + shortcut
         return x
 
@@ -244,6 +246,7 @@ class Head(nn.Module):
     global_pool: str = 'avg'  # FIXME support diff pooling
     drop_rate: float = 0.
 
+    dtype: Dtype = jnp.float32
     conv_layer: ModuleDef = conv2d
     norm_layer: ModuleDef = batchnorm2d
     linear_layer: ModuleDef = linear
@@ -255,8 +258,10 @@ class Head(nn.Module):
         x = self.norm_layer(name='bn', training=training)(x)
         x = self.act_fn(x)
         if self.global_pool == 'avg':
+            x = jnp.asarray(x, jnp.float32)
             x = x.mean((1, 2))
-        x = nn.Dropout(rate=self.drop_rate)(x, deterministic=not training)
+            x = jnp.asarray(x, self.dtype)
+        x = Dropout(rate=self.drop_rate)(x, training=training)
         if self.num_classes > 0:
             x = self.linear_layer(self.num_classes, bias=True, name='classifier')(x)
         return x
@@ -269,6 +274,7 @@ class EfficientHead(nn.Module):
     global_pool: str = 'avg'  # FIXME support diff pooling
     drop_rate: float = 0.
 
+    dtype: Dtype = jnp.float32
     conv_layer: ModuleDef = conv2d
     norm_layer: ModuleDef = None  # ignored, to keep calling code clean
     linear_layer: ModuleDef = linear
@@ -277,11 +283,12 @@ class EfficientHead(nn.Module):
     @nn.compact
     def __call__(self, x, training: bool):
         if self.global_pool == 'avg':
+            x = jnp.asarray(x, jnp.float32)
             x = x.mean((1, 2), keepdims=True)
+            x = jnp.asarray(x, self.dtype)
         x = self.conv_layer(self.num_features, 1, bias=True, name='conv_pw')(x)
         x = self.act_fn(x)
-
-        x = nn.Dropout(rate=self.drop_rate)(x, deterministic=not training)
+        x = Dropout(rate=self.drop_rate)(x, training=training)
         if self.num_classes > 0:
             x = self.linear_layer(self.num_classes, bias=True, name='classifier')(x)
         return x

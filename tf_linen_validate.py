@@ -3,10 +3,14 @@ Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
 """
 import time
 import argparse
-import jax
 import fnmatch
 
+import jax
+import flax
+import tensorflow_datasets as tfds
+
 import jeffnet.data.tf_imagenet_data as imagenet_data
+import jeffnet.data.tf_input_pipeline as input_pipeline
 from jeffnet.common import correct_topk, AverageMeter, list_models, get_model_cfg
 from jeffnet.linen import create_model
 
@@ -19,12 +23,22 @@ parser.add_argument('-b', '--batch-size', default=250, type=int,
                     metavar='N', help='mini-batch size (default: 256)')
 parser.add_argument('--no-jit', action='store_true', default=False,
                     help='Disable jit of model (for comparison).')
+parser.add_argument('--half-precision', action='store_true', default=False,
+                    help='Evaluate in half (mixed) precision')
 
 
 def validate(args):
     rng = jax.random.PRNGKey(0)
+    platform = jax.local_devices()[0].platform
+    if args.half_precision:
+        if platform == 'tpu':
+            model_dtype = jax.numpy.bfloat16
+        else:
+            model_dtype = jax.numpy.float16
+    else:
+        model_dtype = jax.numpy.float32
 
-    model, variables = create_model(args.model, pretrained=True, rng=rng)
+    model, variables = create_model(args.model, pretrained=True, dtype=model_dtype, rng=rng)
     print(f'Created {args.model} model. Validating...')
 
     if args.no_jit:
@@ -34,21 +48,20 @@ def validate(args):
 
     """Runs evaluation and returns top-1 accuracy."""
     image_size = model.default_cfg['input_size'][-1]
-    test_ds, num_batches = imagenet_data.load(
-        imagenet_data.Split.TEST,
-        is_training=False,
-        image_size=image_size,
-        batch_dims=[args.batch_size],
+
+    eval_iter, num_batches = create_eval_iter(
+        args.data, args.batch_size, image_size, args.half_precision,
         mean=tuple([x * 255 for x in model.default_cfg['mean']]),
         std=tuple([x * 255 for x in model.default_cfg['std']]),
-        tfds_data_dir=args.data)
+        interpolation=model.default_cfg['interpolation'],
+    )
 
     batch_time = AverageMeter()
     correct_top1, correct_top5 = 0, 0
     total_examples = 0
     start_time = prev_time = time.time()
-    for batch_index, batch in enumerate(test_ds):
-        images, labels = batch['images'], batch['labels']
+    for batch_index, batch in enumerate(eval_iter):
+        images, labels = batch['image'], batch['label']
         top1_count, top5_count = eval_step(images, labels)
         correct_top1 += int(top1_count)
         correct_top5 += int(top5_count)
@@ -68,6 +81,27 @@ def validate(args):
     print(f'Validation complete. {total_examples / (prev_time - start_time):>5.2f} img/s. '
           f'Acc@1 {acc_1:>7.3f}, Acc@5 {acc_5:>7.3f}')
     return dict(top1=acc_1, top5=acc_5)
+
+
+def prepare_tf_data(xs):
+    def _prepare(x):
+        # Use _numpy() for zero-copy conversion between TF and NumPy.
+        x = x._numpy()  # pylint: disable=protected-access
+        return x
+    return jax.tree_map(_prepare, xs)
+
+
+def create_eval_iter(data_dir, batch_size, image_size, half_precision=False,
+                     mean=None, std=None, interpolation='bicubic'):
+    dataset_builder = tfds.builder('imagenet2012:5.*.*', data_dir=data_dir)
+    assert dataset_builder.info.splits['validation'].num_examples % batch_size == 0
+    num_batches = dataset_builder.info.splits['validation'].num_examples // batch_size
+    # FIXME currently forcing no host/device-split, I haven't added distributed eval support
+    ds = input_pipeline.create_split(
+        dataset_builder, batch_size, train=False, half_precision=half_precision,
+        image_size=image_size, mean=mean, std=std, interpolation=interpolation, no_split=True, no_repeat=True)
+    it = map(prepare_tf_data, ds)
+    return it, num_batches
 
 
 def eval_forward(model, variables, images, labels):

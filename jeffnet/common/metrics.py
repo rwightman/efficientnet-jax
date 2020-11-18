@@ -23,3 +23,9 @@ def correct_topk(logits, labels, topk=(1,)):
     top = lax.top_k(logits, max(topk))[1].transpose()
     correct = top == labels.reshape(1, -1)
     return [correct[:k].reshape(-1).sum(axis=0) for k in topk]
+
+
+def acc_topk(logits, labels, topk=(1,)):
+    top = lax.top_k(logits, max(topk))[1].transpose()
+    correct = top == labels.reshape(1, -1)
+    return [correct[:k].reshape(-1).sum(axis=0) * 100 / labels.shape[0] for k in topk]
