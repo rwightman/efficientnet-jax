@@ -9,9 +9,10 @@ class _RMSPropHyperParams:
     """RMSProp hyper parameters"""
 
     learning_rate: float
-    decay: float
-    momentum: float
+    beta1: float  # named momentum in TF
+    beta2: float  # named decay in TF
     eps: float
+    weight_decay: float
 
 
 @struct.dataclass
@@ -24,16 +25,16 @@ class _RMSPropTfParamState:
 class RMSPropTensorflow(OptimizerDef):
     """RMSProp optimizer that matches Tensorflow impl."""
 
-    def __init__(self, learning_rate: float = None, decay=0.9, momentum=0., eps=1e-8):
+    def __init__(self, learning_rate: float = None, beta1=0., beta2=0.9, eps=1e-8, weight_decay=0.):
         """Constructor for the RMSProp optimizer
 
         Args:
             learning_rate: the step size used to update the parameters.
-            decay (float): discounting factor for the history/coming gradient
-            momentum (float): momentum factor (default: 0)
+            beta1 (float): gradient momentum factor (default: 0.)
+            beta2 (float): discounting factor for the history/coming gradient magnitude (default: 0.9)
             eps: the term added to the gradient magnitude estimate for numerical stability.
         """
-        hyper_params = _RMSPropHyperParams(learning_rate, decay, momentum, eps)
+        hyper_params = _RMSPropHyperParams(learning_rate, beta1, beta2, eps, weight_decay)
         super().__init__(hyper_params)
 
     def init_param_state(self, param):
@@ -44,10 +45,12 @@ class RMSPropTensorflow(OptimizerDef):
         """Apply per-parameter gradients"""
 
         assert hyper_params.learning_rate is not None, 'no learning rate provided.'
-        new_rms = hyper_params.decay * state.rms + (1.0 - hyper_params.decay) * jnp.square(grad)
-        new_mom = hyper_params.momentum * state.mom + \
+        new_rms = hyper_params.beta2 * state.rms + (1.0 - hyper_params.beta2) * jnp.square(grad)
+        new_mom = hyper_params.beta1 * state.mom + \
                   hyper_params.learning_rate * (grad / jnp.sqrt(new_rms + hyper_params.eps))
         new_param = param - new_mom
+        if hyper_params.weight_decay != 0.:
+            new_param -= hyper_params.learning_rate * hyper_params.weight_decay * param
         new_state = _RMSPropTfParamState(new_rms, new_mom)
 
         return new_param, new_state

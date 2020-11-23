@@ -34,13 +34,17 @@ def get_config():
   """Get the default hyperparameter configuration."""
   config = ml_collections.ConfigDict()
 
-  config.model_name = 'tf_efficientnet_b0'
+  config.model = 'tf_efficientnet_b0'
   config.image_size = 0  # set from model defaults if 0
   config.batch_size = 500
   config.lr = 0.016
-  config.optimizer = 'rmsprop'
-  config.momentum = 0.9
-  config.weight_decay = 1e-5
+  config.weight_decay = 1e-5  # l2 weight penalty added to loss
+
+  config.opt = 'rmsproptf'
+  config.opt_eps = .001
+  config.opt_beta1 = 0.9
+  config.opt_beta2 = 0.9
+  config.opt_weight_decay = 0.  # by default, weight decay not applied in opt, l2 penalty above is used
 
   config.lr_schedule = 'step'
   config.lr_decay_rate = 0.97

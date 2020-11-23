@@ -44,8 +44,7 @@ import tensorflow_datasets as tfds
 
 import jeffnet.data.tf_input_pipeline as input_pipeline
 from jeffnet.common import acc_topk, create_lr_schedule_epochs
-from jeffnet.linen import create_model
-from jeffnet.linen.optim.rmsprop_tensorflow import RMSPropTensorflow
+from jeffnet.linen import create_model, create_optim
 
 # enable jax omnistaging
 jax.config.enable_omnistaging()
@@ -207,9 +206,12 @@ def create_train_state(config: ml_collections.ConfigDict, params, model_state):
     if config.half_precision and platform == 'gpu':
         dynamic_scale = flax.optim.DynamicScale()
 
-    # FIXME add optimizer factory and allow choice via config
-    optimizer = RMSPropTensorflow(decay=0.9, momentum=config.momentum, eps=.001).create(params)
-    #optimizer = flax.optim.Momentum(beta=config.momentum, nesterov=True).create(params)
+    opt_kwargs = dict(
+        eps=config.get('opt_eps'), beta1=config.get('opt_beta1'), beta2=config.get('opt_beta2'),
+        weight_decay=config.get('opt_weight_decay', 0))
+    opt_kwargs = {k: v for k, v in opt_kwargs.items() if v is not None}  # remove unset
+    optimizer = create_optim(config.opt, params, **opt_kwargs)
+
     state = TrainState(step=0, optimizer=optimizer, model_state=model_state, dynamic_scale=dynamic_scale)
     return state
 
@@ -244,7 +246,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
 
     rng, model_create_rng = random.split(rng)
     model, variables = create_model(
-        config.model_name,
+        config.model,
         dtype=model_dtype,
         drop_rate=config.drop_rate,
         drop_path_rate=config.drop_path_rate,
