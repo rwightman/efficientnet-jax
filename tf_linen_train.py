@@ -40,12 +40,12 @@ from jax import lax
 from jax import random
 import jax.numpy as jnp
 
-import tensorflow as tf
 import tensorflow_datasets as tfds
 
 import jeffnet.data.tf_input_pipeline as input_pipeline
-from jeffnet.common import acc_topk
+from jeffnet.common import acc_topk, create_lr_schedule_epochs
 from jeffnet.linen import create_model
+from jeffnet.linen.optim.rmsprop_tensorflow import RMSPropTensorflow
 
 # enable jax omnistaging
 jax.config.enable_omnistaging()
@@ -86,31 +86,19 @@ def compute_metrics(logits, labels):
     return metrics
 
 
-def step_decay(lr, step, total_steps):
-    ratio = jnp.maximum(0., step / total_steps)
-    mult = 0.5 * (1. + jnp.cos(jnp.pi * ratio))
-    return mult * lr
+def lr_prefetch_iter(
+        lr_fn,
+        first_step,
+        total_steps,
+        prefetch_to_device=2,
+        devices=None):
+    local_device_count = jax.local_device_count() if devices is None else len(devices)
+    lr_iter = (jnp.ones([local_device_count]) * lr_fn(i) for i in range(first_step, total_steps))
+    # Prefetching learning rate eliminates significant TPU transfer overhead.
+    return flax.jax_utils.prefetch_to_device(lr_iter, prefetch_to_device, devices=devices)
 
 
-def cosine_decay(lr, step, total_steps):
-    ratio = jnp.maximum(0., step / total_steps)
-    mult = 0.5 * (1. + jnp.cos(jnp.pi * ratio))
-    return mult * lr
-
-
-def create_learning_rate_fn(base_learning_rate, steps_per_epoch, num_epochs):
-    warmup_epochs = 5
-
-    def step_fn(step):
-        epoch = step / steps_per_epoch
-        lr = cosine_decay(base_learning_rate, epoch - warmup_epochs, num_epochs - warmup_epochs)
-        warmup = jnp.minimum(1., epoch / warmup_epochs)
-        return lr * warmup
-
-    return step_fn
-
-
-def train_step(apply_fn, state, batch, learning_rate_fn, weight_decay=1e-4, dropout_rng=None):
+def train_step(apply_fn, state, batch, lr, weight_decay=1e-4, dropout_rng=None):
     """Perform a single training step."""
 
     def loss_fn(params):
@@ -127,7 +115,6 @@ def train_step(apply_fn, state, batch, learning_rate_fn, weight_decay=1e-4, drop
     step = state.step
     optimizer = state.optimizer
     dynamic_scale = state.dynamic_scale
-    lr = learning_rate_fn(step)
 
     if dynamic_scale:
         grad_fn = dynamic_scale.value_and_grad(loss_fn, has_aux=True, axis_name='batch')
@@ -221,7 +208,8 @@ def create_train_state(config: ml_collections.ConfigDict, params, model_state):
         dynamic_scale = flax.optim.DynamicScale()
 
     # FIXME add optimizer factory and allow choice via config
-    optimizer = flax.optim.Momentum(beta=config.momentum, nesterov=True).create(params)
+    optimizer = RMSPropTensorflow(decay=0.9, momentum=config.momentum, eps=.001).create(params)
+    #optimizer = flax.optim.Momentum(beta=config.momentum, nesterov=True).create(params)
     state = TrainState(step=0, optimizer=optimizer, model_state=model_state, dynamic_scale=dynamic_scale)
     return state
 
@@ -239,7 +227,6 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
         summary_writer.hparams(dict(config))
 
     rng = random.PRNGKey(42)
-    image_size = 224  # FIXME set from config / model
 
     if config.batch_size % jax.device_count() > 0:
         raise ValueError('Batch size must be divisible by the number of devices')
@@ -257,12 +244,13 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
 
     rng, model_create_rng = random.split(rng)
     model, variables = create_model(
-        'tf_efficientnet_b0',  # FIXME from config
+        config.model_name,
         dtype=model_dtype,
         drop_rate=config.drop_rate,
         drop_path_rate=config.drop_path_rate,
         rng=model_create_rng)
     model_state, params = variables.pop('params')
+    image_size = config.image_size or model.default_cfg['input_size'][-1]
 
     dataset_builder = tfds.builder('imagenet2012:5.*.*', data_dir='/data/')
 
@@ -289,7 +277,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
 
     steps_per_checkpoint = steps_per_epoch * 10
 
-    base_learning_rate = config.learning_rate * config.batch_size / 256.
+    base_lr = config.lr * config.batch_size / 256.
 
     state = create_train_state(config, params, model_state)
     state = restore_checkpoint(state, model_dir)
@@ -297,22 +285,26 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
     step_offset = int(state.step)
     state = flax.jax_utils.replicate(state)
 
-    learning_rate_fn = create_learning_rate_fn(base_learning_rate, steps_per_epoch, config.num_epochs)
+    lr_fn = create_lr_schedule_epochs(
+        base_lr, config.lr_schedule, steps_per_epoch=steps_per_epoch, total_epochs=config.num_epochs,
+        decay_rate=config.lr_decay_rate, decay_epochs=config.lr_decay_epochs, warmup_epochs=config.lr_warmup_epochs,
+        min_lr=config.lr_minimum)
+    lr_iter = lr_prefetch_iter(lr_fn, first_step=step_offset, total_steps=num_steps)
 
-    p_train_step = jax.pmap(
-        functools.partial(train_step, model.apply, learning_rate_fn=learning_rate_fn), axis_name='batch')
+    p_train_step = jax.pmap(functools.partial(
+        train_step, model.apply, weight_decay=config.weight_decay), axis_name='batch')
     p_eval_step = jax.pmap(functools.partial(eval_step, model.apply), axis_name='batch')
 
     epoch_metrics = []
     t_loop_start = time.time()
     num_samples = 0
-    for step, batch in zip(range(step_offset, num_steps), train_iter):
+    for step, batch, lr in zip(range(step_offset, num_steps), train_iter, lr_iter):
         step_p1 = step + 1
         rng, step_rng = random.split(rng)
         sharded_rng = common_utils.shard_prng_key(step_rng)
 
         num_samples += config.batch_size
-        state, metrics = p_train_step(state, batch, dropout_rng=sharded_rng)
+        state, metrics = p_train_step(state, batch, lr=lr, dropout_rng=sharded_rng)
         epoch_metrics.append(metrics)
 
         if step_p1 % steps_per_epoch == 0:

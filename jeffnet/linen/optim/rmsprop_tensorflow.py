@@ -46,7 +46,7 @@ class RMSPropTensorflow(OptimizerDef):
         assert hyper_params.learning_rate is not None, 'no learning rate provided.'
         new_rms = hyper_params.decay * state.rms + (1.0 - hyper_params.decay) * jnp.square(grad)
         new_mom = hyper_params.momentum * state.mom + \
-                  hyper_params.learning_rate * grad / jnp.sqrt(new_rms + hyper_params.eps)
+                  hyper_params.learning_rate * (grad / jnp.sqrt(new_rms + hyper_params.eps))
         new_param = param - new_mom
         new_state = _RMSPropTfParamState(new_rms, new_mom)
 

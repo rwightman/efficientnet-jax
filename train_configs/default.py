@@ -34,10 +34,20 @@ def get_config():
   """Get the default hyperparameter configuration."""
   config = ml_collections.ConfigDict()
 
-  config.learning_rate = 0.1
-  config.momentum = 0.9
+  config.model_name = 'tf_efficientnet_b0'
+  config.image_size = 0  # set from model defaults if 0
   config.batch_size = 500
-  config.num_epochs = 10
+  config.lr = 0.016
+  config.optimizer = 'rmsprop'
+  config.momentum = 0.9
+  config.weight_decay = 1e-5
+
+  config.lr_schedule = 'step'
+  config.lr_decay_rate = 0.97
+  config.lr_decay_epochs = 2.4
+  config.lr_warmup_epochs = 5.
+  config.lr_minimum = 1e-6
+  config.num_epochs = 450
 
   config.cache = False
   config.half_precision = True
