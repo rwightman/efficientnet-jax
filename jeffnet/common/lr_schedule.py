@@ -67,7 +67,7 @@ def create_lr_schedule(
             assert decay_steps > 0
             lr = lr * decay_rate ** (step_mwu // decay_steps)
         elif decay_type.startswith('poly'):
-            lr = min_lr + (lr - min_lr) * (1. - step_pct) ^ power
+            lr = min_lr + (lr - min_lr) * (1. - step_pct) ** power
         elif decay_type.startswith('exp'):
             assert decay_steps > 0
             lr = lr * decay_rate ** (step_mwu / decay_steps)
