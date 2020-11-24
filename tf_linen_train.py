@@ -97,7 +97,7 @@ def lr_prefetch_iter(
     return flax.jax_utils.prefetch_to_device(lr_iter, prefetch_to_device, devices=devices)
 
 
-def train_step(apply_fn, state, batch, lr, weight_decay=1e-4, dropout_rng=None):
+def train_step(apply_fn, state, batch, lr, weight_decay=1e-4, ema_decay=0., dropout_rng=None):
     """Perform a single training step."""
 
     def loss_fn(params):
@@ -135,14 +135,27 @@ def train_step(apply_fn, state, batch, lr, weight_decay=1e-4, dropout_rng=None):
         new_optimizer = jax.tree_multimap(functools.partial(jnp.where, is_fin), new_optimizer, optimizer)
         metrics['scale'] = dynamic_scale.scale
 
+    new_ema_params = None
+    new_ema_model_state = None
+    if ema_decay != 0.:
+        new_ema_params = jax.tree_multimap(
+            lambda ema, p: ema * ema_decay + (1 - ema_decay) * p, state.ema_params, optimizer.target)
+        new_ema_model_state = jax.tree_multimap(
+            lambda ema, s: ema * ema_decay + (1 - ema_decay) * s, state.ema_model_state, new_model_state)
     new_state = state.replace(
-        step=step + 1, optimizer=new_optimizer, model_state=new_model_state, dynamic_scale=dynamic_scale)
+        step=step + 1, optimizer=new_optimizer, model_state=new_model_state, dynamic_scale=dynamic_scale,
+        ema_params=new_ema_params, ema_model_state=new_ema_model_state)
     return new_state, metrics
 
 
 def eval_step(apply_fn, state, batch):
-    params = state.optimizer.target
-    variables = {'params': params, **state.model_state}
+    variables = {'params': state.optimizer.target, **state.model_state}
+    logits = apply_fn(variables, batch['image'], training=False, mutable=False)
+    return compute_metrics(logits, batch['label'])
+
+
+def eval_step_ema(apply_fn, state, batch):
+    variables = {'params': state.ema_params, **state.ema_model_state}
     logits = apply_fn(variables, batch['image'], training=False, mutable=False)
     return compute_metrics(logits, batch['label'])
 
@@ -178,6 +191,8 @@ class TrainState:
     optimizer: flax.optim.Optimizer
     model_state: Any
     dynamic_scale: flax.optim.DynamicScale
+    ema_params: Any = None
+    ema_model_state: Any = None
 
 
 def restore_checkpoint(state, model_dir):
@@ -212,7 +227,15 @@ def create_train_state(config: ml_collections.ConfigDict, params, model_state):
     opt_kwargs = {k: v for k, v in opt_kwargs.items() if v is not None}  # remove unset
     optimizer = create_optim(config.opt, params, **opt_kwargs)
 
-    state = TrainState(step=0, optimizer=optimizer, model_state=model_state, dynamic_scale=dynamic_scale)
+    ema_params = None
+    ema_model_state = None
+    if config.ema_decay != 0.:
+        # clone params & stae, is this the best way? deepcopy work?
+        ema_params = jax.tree_map(lambda x: x, params)
+        ema_model_state = jax.tree_map(lambda x: x, model_state)
+    state = TrainState(
+        step=0, optimizer=optimizer, model_state=model_state, dynamic_scale=dynamic_scale,
+        ema_params=ema_params, ema_model_state=ema_model_state)
     return state
 
 
@@ -294,8 +317,11 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
     lr_iter = lr_prefetch_iter(lr_fn, first_step=step_offset, total_steps=num_steps)
 
     p_train_step = jax.pmap(functools.partial(
-        train_step, model.apply, weight_decay=config.weight_decay), axis_name='batch')
+        train_step, model.apply, ema_decay=config.ema_decay, weight_decay=config.weight_decay), axis_name='batch')
     p_eval_step = jax.pmap(functools.partial(eval_step, model.apply), axis_name='batch')
+    p_eval_step_ema = None
+    if config.ema_decay != 0.:
+        p_eval_step_ema = jax.pmap(functools.partial(eval_step_ema, model.apply), axis_name='batch')
 
     epoch_metrics = []
     t_loop_start = time.time()
@@ -323,8 +349,8 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
                     for i, val in enumerate(vals):
                         summary_writer.scalar(tag, val, step_p1 - len(vals) + i)
                 summary_writer.scalar('samples per second', samples_per_sec, step)
-
             epoch_metrics = []
+
             eval_metrics = []
             # sync batch statistics across replicas
             state = sync_batch_stats(state)
@@ -337,6 +363,18 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
             summary = jax.tree_map(lambda x: x.mean(), eval_metrics)
             logging.info('eval epoch: %d, loss: %.4f, top1: %.2f, top5: %.3f',
                          epoch, summary['loss'], summary['top1'], summary['top5'])
+
+            eval_metrics_ema = []
+            for step_eval in range(steps_per_eval):
+                eval_batch = next(eval_iter)
+                metrics = p_eval_step_ema(state, eval_batch)
+                eval_metrics_ema.append(metrics)
+
+            eval_metrics_ema = common_utils.get_metrics(eval_metrics_ema)
+            summary = jax.tree_map(lambda x: x.mean(), eval_metrics_ema)
+            logging.info('eval epoch ema: %d, loss: %.4f, top1: %.2f, top5: %.3f',
+                         epoch, summary['loss'], summary['top1'], summary['top5'])
+
             if jax.host_id() == 0:
                 for key, val in eval_metrics.items():
                     tag = 'eval_%s' % key

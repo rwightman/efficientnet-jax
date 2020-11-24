@@ -39,6 +39,7 @@ def get_config():
   config.batch_size = 500
   config.lr = 0.016
   config.weight_decay = 1e-5  # l2 weight penalty added to loss
+  config.ema_decay = .9997
 
   config.opt = 'rmsproptf'
   config.opt_eps = .001
