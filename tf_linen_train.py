@@ -43,38 +43,15 @@ import jax.numpy as jnp
 import tensorflow_datasets as tfds
 
 import jeffnet.data.tf_input_pipeline as input_pipeline
-from jeffnet.common import acc_topk, create_lr_schedule_epochs
+from jeffnet.common import acc_topk, create_lr_schedule_epochs, cross_entropy_loss
 from jeffnet.linen import create_model, create_optim
 
 # enable jax omnistaging
 jax.config.enable_omnistaging()
 
 
-def weighted_cross_entropy_loss(logits, targets, weights=None, label_smoothing=0.0):
-    """Compute weighted cross entropy and entropy for log probs and targets.
-    Args:
-        logits: [batch, length, num_classes] float array.
-        targets: categorical targets [batch, length] int array.
-        weights: None or array of shape [batch, length].
-        label_smoothing: label smoothing constant, used to determine the on and off values.
-    Returns:
-        Tuple of scalar loss and batch normalizing factor.
-    """
-    if logits.ndim != targets.ndim + 1:
-        raise ValueError('Incorrect shapes. Got shape %s logits and %s targets' %
-                         (str(logits.shape), str(targets.shape)))
-    num_classes = logits.shape[-1]
-    off_value = label_smoothing / num_classes
-    on_value = 1. - label_smoothing + off_value
-    soft_targets = common_utils.onehot(targets, num_classes, on_value=on_value, off_value=off_value)
-    loss = -jnp.sum(soft_targets * jax.nn.log_softmax(logits), axis=-1)
-    if weights is not None:
-        loss = loss * weights
-    return loss.mean()
-
-
-def compute_metrics(logits, labels):
-    loss = weighted_cross_entropy_loss(logits, labels, label_smoothing=0.1)
+def compute_metrics(logits, labels, label_smoothing=0.):
+    loss = cross_entropy_loss(logits, labels, label_smoothing=label_smoothing)
     top1, top5 = acc_topk(logits, labels, (1, 5))
     metrics = {
         'loss': loss,
@@ -97,7 +74,7 @@ def lr_prefetch_iter(
     return flax.jax_utils.prefetch_to_device(lr_iter, prefetch_to_device, devices=devices)
 
 
-def train_step(apply_fn, state, batch, lr, weight_decay=1e-4, dropout_rng=None):
+def train_step(apply_fn, state, batch, lr, label_smoothing=0.1, weight_decay=1e-4, ema_decay=0., dropout_rng=None):
     """Perform a single training step."""
 
     def loss_fn(params):
@@ -105,7 +82,7 @@ def train_step(apply_fn, state, batch, lr, weight_decay=1e-4, dropout_rng=None):
         variables = {'params': params, **state.model_state}
         logits, new_model_state = apply_fn(
             variables, batch['image'], training=True, mutable=['batch_stats'], rngs={'dropout': dropout_rng})
-        loss = weighted_cross_entropy_loss(logits, batch['label'], label_smoothing=0.1)
+        loss = cross_entropy_loss(logits, batch['label'], label_smoothing=label_smoothing)
         weight_penalty_params = jax.tree_leaves(variables['params'])
         weight_penalty = 0.5 * weight_decay * sum([jnp.sum(x ** 2) for x in weight_penalty_params if x.ndim > 1])
         loss = loss + weight_penalty
@@ -126,7 +103,7 @@ def train_step(apply_fn, state, batch, lr, weight_decay=1e-4, dropout_rng=None):
         grad = lax.pmean(grad, axis_name='batch')
     new_model_state, logits = aux[1]
     new_optimizer = optimizer.apply_gradient(grad, learning_rate=lr)
-    metrics = compute_metrics(logits, batch['label'])
+    metrics = compute_metrics(logits, batch['label'], label_smoothing=label_smoothing)
     metrics['learning_rate'] = lr
 
     if dynamic_scale:
@@ -135,14 +112,29 @@ def train_step(apply_fn, state, batch, lr, weight_decay=1e-4, dropout_rng=None):
         new_optimizer = jax.tree_multimap(functools.partial(jnp.where, is_fin), new_optimizer, optimizer)
         metrics['scale'] = dynamic_scale.scale
 
+    new_ema_params = None
+    new_ema_model_state = None
+    if ema_decay != 0.:
+        prev_ema_params = optimizer.target if state.ema_params is None else state.ema_params
+        new_ema_params = jax.tree_multimap(
+            lambda ema, p: ema * ema_decay + (1. - ema_decay) * p, prev_ema_params, new_optimizer.target)
+        prev_ema_model_state = state.model_state if state.ema_model_state is None else state.ema_model_state
+        new_ema_model_state = jax.tree_multimap(
+            lambda ema, s: ema * ema_decay + (1. - ema_decay) * s, prev_ema_model_state, new_model_state)
     new_state = state.replace(
-        step=step + 1, optimizer=new_optimizer, model_state=new_model_state, dynamic_scale=dynamic_scale)
+        step=step + 1, optimizer=new_optimizer, model_state=new_model_state, dynamic_scale=dynamic_scale,
+        ema_params=new_ema_params, ema_model_state=new_ema_model_state)
     return new_state, metrics
 
 
 def eval_step(apply_fn, state, batch):
-    params = state.optimizer.target
-    variables = {'params': params, **state.model_state}
+    variables = {'params': state.optimizer.target, **state.model_state}
+    logits = apply_fn(variables, batch['image'], training=False, mutable=False)
+    return compute_metrics(logits, batch['label'])
+
+
+def eval_step_ema(apply_fn, state, batch):
+    variables = {'params': state.ema_params, **state.ema_model_state}
     logits = apply_fn(variables, batch['image'], training=False, mutable=False)
     return compute_metrics(logits, batch['label'])
 
@@ -178,6 +170,8 @@ class TrainState:
     optimizer: flax.optim.Optimizer
     model_state: Any
     dynamic_scale: flax.optim.DynamicScale
+    ema_params: Any = None
+    ema_model_state: Any = None
 
 
 def restore_checkpoint(state, model_dir):
@@ -254,7 +248,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
     model_state, params = variables.pop('params')
     image_size = config.image_size or model.default_cfg['input_size'][-1]
 
-    dataset_builder = tfds.builder('imagenet2012:5.*.*', data_dir='/data/')
+    dataset_builder = tfds.builder(config.dataset, data_dir=config.data_dir)
 
     train_iter = create_input_iter(
         dataset_builder, local_batch_size, train=True,
@@ -293,9 +287,18 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
         min_lr=config.lr_minimum)
     lr_iter = lr_prefetch_iter(lr_fn, first_step=step_offset, total_steps=num_steps)
 
-    p_train_step = jax.pmap(functools.partial(
-        train_step, model.apply, weight_decay=config.weight_decay), axis_name='batch')
+    p_train_step = jax.pmap(
+        functools.partial(
+            train_step,
+            model.apply,
+            label_smoothing=config.label_smoothing,
+            weight_decay=config.weight_decay,
+            ema_decay=config.ema_decay),
+        axis_name='batch')
     p_eval_step = jax.pmap(functools.partial(eval_step, model.apply), axis_name='batch')
+    p_eval_step_ema = None
+    if config.ema_decay != 0.:
+        p_eval_step_ema = jax.pmap(functools.partial(eval_step_ema, model.apply), axis_name='batch')
 
     epoch_metrics = []
     t_loop_start = time.time()
@@ -323,11 +326,10 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
                     for i, val in enumerate(vals):
                         summary_writer.scalar(tag, val, step_p1 - len(vals) + i)
                 summary_writer.scalar('samples per second', samples_per_sec, step)
-
             epoch_metrics = []
+            state = sync_batch_stats(state)  # sync batch statistics across replicas
+
             eval_metrics = []
-            # sync batch statistics across replicas
-            state = sync_batch_stats(state)
             for step_eval in range(steps_per_eval):
                 eval_batch = next(eval_iter)
                 metrics = p_eval_step(state, eval_batch)
@@ -337,6 +339,20 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
             summary = jax.tree_map(lambda x: x.mean(), eval_metrics)
             logging.info('eval epoch: %d, loss: %.4f, top1: %.2f, top5: %.3f',
                          epoch, summary['loss'], summary['top1'], summary['top5'])
+
+            if p_eval_step_ema is not None:
+                # NOTE running both ema and non-ema eval while improving this script
+                eval_metrics = []
+                for step_eval in range(steps_per_eval):
+                    eval_batch = next(eval_iter)
+                    metrics = p_eval_step_ema(state, eval_batch)
+                    eval_metrics.append(metrics)
+
+                eval_metrics = common_utils.get_metrics(eval_metrics)
+                summary = jax.tree_map(lambda x: x.mean(), eval_metrics)
+                logging.info('eval epoch ema: %d, loss: %.4f, top1: %.2f, top5: %.3f',
+                             epoch, summary['loss'], summary['top1'], summary['top5'])
+
             if jax.host_id() == 0:
                 for key, val in eval_metrics.items():
                     tag = 'eval_%s' % key
@@ -362,8 +378,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string(
-    'model_dir', default='./output',
-    help=('Directory to store model data.'))
+    'model_dir', default='./output', help='Directory to store model data.')
 
 config_flags.DEFINE_config_file(
     'config', os.path.join(os.path.dirname(__file__), 'train_configs/default.py'),
