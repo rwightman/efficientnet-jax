@@ -1,6 +1,7 @@
-import jax.numpy as jnp
-import numpy as onp
 import flax.struct as struct
+import jax.lax as lax
+import jax.numpy as jnp
+import numpy as np
 from flax.optim.base import OptimizerDef
 
 
@@ -18,8 +19,8 @@ class _RMSPropHyperParams:
 @struct.dataclass
 class _RMSPropTfParamState:
     """RMSProp parameter state"""
-    rms: onp.ndarray
-    mom: onp.ndarray
+    rms: np.ndarray
+    mom: np.ndarray
 
 
 class RMSPropTensorflow(OptimizerDef):
@@ -47,7 +48,7 @@ class RMSPropTensorflow(OptimizerDef):
         assert hyper_params.learning_rate is not None, 'no learning rate provided.'
         new_rms = hyper_params.beta2 * state.rms + (1.0 - hyper_params.beta2) * jnp.square(grad)
         new_mom = hyper_params.beta1 * state.mom + \
-                  hyper_params.learning_rate * (grad / jnp.sqrt(new_rms + hyper_params.eps))
+                  hyper_params.learning_rate * grad * lax.rsqrt(new_rms + hyper_params.eps)
         new_param = param - new_mom
         if hyper_params.weight_decay != 0.:
             new_param -= hyper_params.learning_rate * hyper_params.weight_decay * param
