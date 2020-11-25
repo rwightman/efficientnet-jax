@@ -170,8 +170,8 @@ class TrainState:
     optimizer: flax.optim.Optimizer
     model_state: Any
     dynamic_scale: flax.optim.DynamicScale
-    ema_params: Any = None
-    ema_model_state: Any = None
+    ema_params: flax.core.FrozenDict = None
+    ema_model_state: flax.core.FrozenDict = None
 
 
 def restore_checkpoint(state, model_dir):
@@ -271,7 +271,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
     else:
         steps_per_eval = config.steps_per_eval
 
-    steps_per_checkpoint = steps_per_epoch * 10
+    steps_per_checkpoint = steps_per_epoch * 1
 
     base_lr = config.lr * config.batch_size / 256.
 
@@ -279,6 +279,11 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
     state = restore_checkpoint(state, model_dir)
     # step_offset > 0 if restarting from checkpoint
     step_offset = int(state.step)
+    if step_offset > 0:
+        # FIXME this seems hacky but need to workaround ema params / state being restored as dict not FrozenDict
+        state = state.replace(
+            ema_params=flax.core.freeze(state.ema_params),
+            ema_model_state=flax.core.freeze(state.ema_model_state))
     state = flax.jax_utils.replicate(state)
 
     lr_fn = create_lr_schedule_epochs(
