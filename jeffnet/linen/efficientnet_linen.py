@@ -7,6 +7,7 @@ from typing import Any, Callable, Sequence, Dict
 from functools import partial
 
 from flax import linen as nn
+import flax.linen.initializers as initializers
 import jax
 import jax.numpy as jnp
 
@@ -17,6 +18,8 @@ from .blocks_linen import ConvBnAct, SqueezeExcite, BlockFactory, Head, Efficien
 
 ModuleDef = Any
 Dtype = Any
+effnet_normal = partial(initializers.variance_scaling, 2.0, "fan_out", "normal")
+effnet_uniform = partial(initializers.variance_scaling, 1.0/3, "fan_out", "uniform")
 
 
 class EfficientNet(nn.Module):
@@ -63,11 +66,11 @@ class EfficientNet(nn.Module):
         # add dtype binding to layers
         # FIXME is there better way to handle dtype? Passing dtype to all child Modules also seems messy...
         lkwargs = dict(
-            conv_layer=partial(self.conv_layer, dtype=self.dtype),
+            conv_layer=partial(self.conv_layer, dtype=self.dtype, kernel_init=effnet_normal()),
             norm_layer=partial(self.norm_layer, dtype=self.dtype),
             act_fn=self.act_fn)
         se_layer = partial(self.se_layer, dtype=self.dtype)
-        linear_layer = partial(linear, dtype=self.dtype)
+        linear_layer = partial(linear, dtype=self.dtype, kernel_init=effnet_uniform())
 
         stem_features = self.stem_size
         if not self.fix_stem:

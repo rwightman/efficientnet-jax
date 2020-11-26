@@ -119,7 +119,8 @@ class DepthwiseSeparable(nn.Module):
 
         if self.se_layer is not None and self.se_ratio > 0:
             x = self.se_layer(
-                num_features=self.in_features, se_ratio=self.se_ratio, act_fn=self.act_fn, name='se')(x)
+                num_features=self.in_features, se_ratio=self.se_ratio,
+                conv_layer=self.conv_layer, act_fn=self.act_fn, name='se')(x)
 
         x = create_conv(
             self.out_features, self.pw_kernel_size, padding=self.pad_type,
@@ -177,7 +178,7 @@ class InvertedResidual(nn.Module):
         if self.se_layer is not None and self.se_ratio > 0:
             x = self.se_layer(
                 num_features=features, block_features=self.in_features, se_ratio=self.se_ratio,
-                act_fn=self.act_fn, name='se')(x)
+                conv_layer=self.conv_layer, act_fn=self.act_fn, name='se')(x)
 
         x = create_conv(
             self.out_features, self.pw_kernel_size, padding=self.pad_type,
@@ -226,7 +227,7 @@ class EdgeResidual(nn.Module):
         if self.se_layer is not None and self.se_ratio > 0:
             x = self.se_layer(
                 num_features=features, block_features=self.in_features, se_ratio=self.se_ratio,
-                act_fn=self.act_fn, name='se')(x)
+                conv_layer=self.conv_layer, act_fn=self.act_fn, name='se')(x)
 
         x = create_conv(
             self.out_features, self.pw_kernel_size, stride=self.stride, dilation=self.dilation,
