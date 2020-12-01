@@ -11,8 +11,6 @@ from .constants import IMAGENET_MEAN, IMAGENET_STD, INCEPTION_MEAN, INCEPTION_ST
 
 
 def get_model_cfg(name):
-    if name not in _model_cfg:
-        return None
     return deepcopy(_model_cfg[name])
 
 

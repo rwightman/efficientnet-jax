@@ -44,10 +44,54 @@ import tensorflow_datasets as tfds
 
 import jeffnet.data.tf_input_pipeline as input_pipeline
 from jeffnet.common import acc_topk, create_lr_schedule_epochs, cross_entropy_loss
-from jeffnet.linen import create_model, create_optim
+from jeffnet.linen import create_model, create_optim, EmaState
 
 # enable jax omnistaging
 jax.config.enable_omnistaging()
+
+
+# flax.struct.dataclass enables instances of this class to be passed into jax
+# transformations like tree_map and pmap.
+@flax.struct.dataclass
+class TrainState:
+    step: int
+    optimizer: flax.optim.Optimizer
+    model_state: Any
+    dynamic_scale: flax.optim.DynamicScale
+    ema: EmaState
+
+
+def create_train_state(config: ml_collections.ConfigDict, params, model_state):
+    """Create initial training state."""
+    dynamic_scale = None
+    platform = jax.local_devices()[0].platform
+    if config.half_precision and platform == 'gpu':
+        dynamic_scale = flax.optim.DynamicScale()
+
+    opt_kwargs = dict(
+        eps=config.get('opt_eps'), beta1=config.get('opt_beta1'), beta2=config.get('opt_beta2'),
+        weight_decay=config.get('opt_weight_decay', 0))
+    opt_kwargs = {k: v for k, v in opt_kwargs.items() if v is not None}  # remove unset
+    optimizer = create_optim(config.opt, params, **opt_kwargs)
+    if config.ema_decay:
+        ema = EmaState.create(config.ema_decay, optimizer.target, model_state)
+    else:
+        ema = None
+
+    state = TrainState(step=0, optimizer=optimizer, model_state=model_state, dynamic_scale=dynamic_scale, ema=ema)
+    return state
+
+
+def restore_checkpoint(state, model_dir):
+    return checkpoints.restore_checkpoint(model_dir, state)
+
+
+def save_checkpoint(state, model_dir):
+    if jax.host_id() == 0:
+        # get train state from the first replica
+        state = jax.device_get(jax.tree_map(lambda x: x[0], state))
+        step = int(state.step)
+        checkpoints.save_checkpoint(model_dir, state, step, keep=3)
 
 
 def compute_metrics(logits, labels, label_smoothing=0.):
@@ -62,19 +106,7 @@ def compute_metrics(logits, labels, label_smoothing=0.):
     return metrics
 
 
-def lr_prefetch_iter(
-        lr_fn,
-        first_step,
-        total_steps,
-        prefetch_to_device=2,
-        devices=None):
-    local_device_count = jax.local_device_count() if devices is None else len(devices)
-    lr_iter = (jnp.ones([local_device_count]) * lr_fn(i) for i in range(first_step, total_steps))
-    # Prefetching learning rate eliminates significant TPU transfer overhead.
-    return flax.jax_utils.prefetch_to_device(lr_iter, prefetch_to_device, devices=devices)
-
-
-def train_step(apply_fn, state, batch, lr, label_smoothing=0.1, weight_decay=1e-4, ema_decay=0., dropout_rng=None):
+def train_step(apply_fn, state, batch, lr, label_smoothing=0.1, weight_decay=1e-4, dropout_rng=None):
     """Perform a single training step."""
 
     def loss_fn(params):
@@ -91,6 +123,7 @@ def train_step(apply_fn, state, batch, lr, label_smoothing=0.1, weight_decay=1e-
     step = state.step
     optimizer = state.optimizer
     dynamic_scale = state.dynamic_scale
+    ema = state.ema
 
     if dynamic_scale:
         grad_fn = dynamic_scale.value_and_grad(loss_fn, has_aux=True, axis_name='batch')
@@ -112,18 +145,9 @@ def train_step(apply_fn, state, batch, lr, label_smoothing=0.1, weight_decay=1e-
         new_optimizer = jax.tree_multimap(functools.partial(jnp.where, is_fin), new_optimizer, optimizer)
         metrics['scale'] = dynamic_scale.scale
 
-    new_ema_params = None
-    new_ema_model_state = None
-    if ema_decay != 0.:
-        prev_ema_params = optimizer.target if state.ema_params is None else state.ema_params
-        new_ema_params = jax.tree_multimap(
-            lambda ema, p: ema * ema_decay + (1. - ema_decay) * p, prev_ema_params, new_optimizer.target)
-        prev_ema_model_state = state.model_state if state.ema_model_state is None else state.ema_model_state
-        new_ema_model_state = jax.tree_multimap(
-            lambda ema, s: ema * ema_decay + (1. - ema_decay) * s, prev_ema_model_state, new_model_state)
+    new_ema = ema.update(new_optimizer.target, new_model_state) if ema is not None else None
     new_state = state.replace(
-        step=step + 1, optimizer=new_optimizer, model_state=new_model_state, dynamic_scale=dynamic_scale,
-        ema_params=new_ema_params, ema_model_state=new_ema_model_state)
+        step=step + 1, optimizer=new_optimizer, model_state=new_model_state, dynamic_scale=dynamic_scale, ema=new_ema)
     return new_state, metrics
 
 
@@ -134,7 +158,7 @@ def eval_step(apply_fn, state, batch):
 
 
 def eval_step_ema(apply_fn, state, batch):
-    variables = {'params': state.ema_params, **state.ema_model_state}
+    variables = {'params': state.ema.params, **state.ema.model_state}
     logits = apply_fn(variables, batch['image'], training=False, mutable=False)
     return compute_metrics(logits, batch['label'])
 
@@ -162,30 +186,6 @@ def create_input_iter(dataset_builder, batch_size, train, image_size, half_preci
     return it
 
 
-# flax.struct.dataclass enables instances of this class to be passed into jax
-# transformations like tree_map and pmap.
-@flax.struct.dataclass
-class TrainState:
-    step: int
-    optimizer: flax.optim.Optimizer
-    model_state: Any
-    dynamic_scale: flax.optim.DynamicScale
-    ema_params: flax.core.FrozenDict = None
-    ema_model_state: flax.core.FrozenDict = None
-
-
-def restore_checkpoint(state, model_dir):
-    return checkpoints.restore_checkpoint(model_dir, state)
-
-
-def save_checkpoint(state, model_dir):
-    if jax.host_id() == 0:
-        # get train state from the first replica
-        state = jax.device_get(jax.tree_map(lambda x: x[0], state))
-        step = int(state.step)
-        checkpoints.save_checkpoint(model_dir, state, step, keep=3)
-
-
 def sync_batch_stats(state):
     """Sync the batch statistics across replicas."""
     avg = jax.pmap(lambda x: lax.pmean(x, 'x'), 'x')
@@ -193,21 +193,16 @@ def sync_batch_stats(state):
     return state.replace(model_state=new_model_state)
 
 
-def create_train_state(config: ml_collections.ConfigDict, params, model_state):
-    """Create initial training state."""
-    dynamic_scale = None
-    platform = jax.local_devices()[0].platform
-    if config.half_precision and platform == 'gpu':
-        dynamic_scale = flax.optim.DynamicScale()
-
-    opt_kwargs = dict(
-        eps=config.get('opt_eps'), beta1=config.get('opt_beta1'), beta2=config.get('opt_beta2'),
-        weight_decay=config.get('opt_weight_decay', 0))
-    opt_kwargs = {k: v for k, v in opt_kwargs.items() if v is not None}  # remove unset
-    optimizer = create_optim(config.opt, params, **opt_kwargs)
-
-    state = TrainState(step=0, optimizer=optimizer, model_state=model_state, dynamic_scale=dynamic_scale)
-    return state
+def lr_prefetch_iter(
+        lr_fn,
+        first_step,
+        total_steps,
+        prefetch_to_device=2,
+        devices=None):
+    local_device_count = jax.local_device_count() if devices is None else len(devices)
+    lr_iter = (jnp.ones([local_device_count]) * lr_fn(i) for i in range(first_step, total_steps))
+    # Prefetching learning rate eliminates significant TPU transfer overhead.
+    return flax.jax_utils.prefetch_to_device(lr_iter, prefetch_to_device, devices=devices)
 
 
 def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
@@ -279,11 +274,6 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
     state = restore_checkpoint(state, model_dir)
     # step_offset > 0 if restarting from checkpoint
     step_offset = int(state.step)
-    if step_offset > 0:
-        # FIXME this seems hacky but need to workaround ema params / state being restored as dict not FrozenDict
-        state = state.replace(
-            ema_params=flax.core.freeze(state.ema_params),
-            ema_model_state=flax.core.freeze(state.ema_model_state))
     state = flax.jax_utils.replicate(state)
 
     lr_fn = create_lr_schedule_epochs(
