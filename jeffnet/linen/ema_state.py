@@ -6,31 +6,26 @@ import jax
 
 @struct.dataclass
 class EmaState:
-    ema_decay: float = struct.field(pytree_node=False)
-    ema_params: flax.core.FrozenDict
-    ema_model_state: flax.core.FrozenDict
+    decay: float = struct.field(pytree_node=False, default=0.)
+    params: flax.core.FrozenDict = None
+    model_state: flax.core.FrozenDict = None
 
     @staticmethod
     def create(decay, params, model_state):
         """Initialize ema state"""
+        if decay == 0.:
+            # default state == disabled
+            return EmaState()
         ema_params = jax.tree_map(lambda x: x, params)
         ema_model_state = jax.tree_map(lambda x: x, model_state)
         return EmaState(decay, ema_params, ema_model_state)
 
     def update(self, new_params, new_model_state):
-        new_ema_params = jax.tree_multimap(
-            lambda ema, p: ema * self.ema_decay + (1. - self.ema_decay) * p, self.ema_params, new_params)
-        new_ema_model_state = jax.tree_multimap(
-            lambda ema, s: ema * self.ema_decay + (1. - self.ema_decay) * s, self.ema_model_state, new_model_state)
-        return self.replace(ema_params=new_ema_params, ema_model_state=new_ema_model_state)
+        if self.decay == 0.:
+            return self.replace(params=None, model_state=None)
 
-    # def state_dict(self):
-    #     return serialization.to_state_dict({
-    #         'ema_params': serialization.to_state_dict(self.ema_params),
-    #         'ema_model_state': serialization.to_state_dict(self.ema_model_state)
-    #     })
-    #
-    # def restore_state(self, state_dict):
-    #     ema_params = serialization.from_state_dict(self.ema_params, state_dict['ema_params'])
-    #     ema_model_state = serialization.from_state_dict(self.ema_model_state, state_dict['ema_model_state'])
-    #     return self.replace(ema_params=ema_params, ema_model_state=ema_model_state)
+        new_params = jax.tree_multimap(
+            lambda ema, p: ema * self.decay + (1. - self.decay) * p, self.params, new_params)
+        new_model_state = jax.tree_multimap(
+            lambda ema, s: ema * self.decay + (1. - self.decay) * s, self.model_state, new_model_state)
+        return self.replace(params=new_params, model_state=new_model_state)

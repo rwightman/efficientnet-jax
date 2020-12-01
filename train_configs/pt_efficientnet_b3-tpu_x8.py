@@ -1,11 +1,11 @@
 """ EfficientNet-B3 for TPU v3-8 training
 """
 
-from .default import get_config as get_default
+from train_configs import default as default_lib
 
 
 def get_config():
-    config = get_default()
+    config = default_lib.get_config()
 
     config.model = 'pt_efficientnet_b3'
     config.batch_size = 2000

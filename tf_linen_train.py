@@ -73,10 +73,7 @@ def create_train_state(config: ml_collections.ConfigDict, params, model_state):
         weight_decay=config.get('opt_weight_decay', 0))
     opt_kwargs = {k: v for k, v in opt_kwargs.items() if v is not None}  # remove unset
     optimizer = create_optim(config.opt, params, **opt_kwargs)
-    if config.ema_decay:
-        ema = EmaState.create(config.ema_decay, optimizer.target, model_state)
-    else:
-        ema = None
+    ema = EmaState.create(config.ema_decay, optimizer.target, model_state)
 
     state = TrainState(step=0, optimizer=optimizer, model_state=model_state, dynamic_scale=dynamic_scale, ema=ema)
     return state
@@ -287,8 +284,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
             train_step,
             model.apply,
             label_smoothing=config.label_smoothing,
-            weight_decay=config.weight_decay,
-            ema_decay=config.ema_decay),
+            weight_decay=config.weight_decay),
         axis_name='batch')
     p_eval_step = jax.pmap(functools.partial(eval_step, model.apply), axis_name='batch')
     p_eval_step_ema = None
