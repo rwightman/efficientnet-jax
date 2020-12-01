@@ -35,33 +35,33 @@ def create_optim(name, params, learning_rate=None, weight_decay=0, **kwargs):
     if name == 'sgd':
         _erase(opt_args, ('eps', 'beta2'))
         _rename(opt_args, ('beta1',), ('beta',))
-        optimizer = flax.optim.GradientDescent(**opt_args)
+        optimizer_def = flax.optim.GradientDescent(**opt_args)
     elif name == 'momentum':
         _erase(opt_args, ('eps', 'beta2'))
         _rename(opt_args, ('beta1',), ('beta',))
-        optimizer = flax.optim.Momentum(**opt_args)
+        optimizer_def = flax.optim.Momentum(**opt_args)
     elif name == 'nesterov':
         _erase(opt_args, ('eps', 'beta2'))
         _rename(opt_args, ('beta1',), ('beta',))
-        optimizer = flax.optim.Momentum(**opt_args, nesterov=True)
+        optimizer_def = flax.optim.Momentum(**opt_args, nesterov=True)
     elif name == 'adafactor':
         _erase(opt_args, ('eps', 'beta2', 'weight_decay'))
         _rename(opt_args, ('eps1', 'eps2'), ('epsilon1', 'epsilon2'))
         # eps is not used, there is a separate epsilon1 and epsilon2 parameter
         # beta2 not used, decay_rate is a related param, should beta2 be accepted from config as decay_rate?
-        optimizer = flax.optim.Adafactor(**opt_args)
+        optimizer_def = flax.optim.Adafactor(**opt_args)
     elif name == 'adagrad':
         _erase(opt_args, ('beta1', 'beta2', 'weight_decay'))
-        optimizer = flax.optim.Adagrad(**opt_args)
+        optimizer_def = flax.optim.Adagrad(**opt_args)
     elif name == 'adam':
-        optimizer = flax.optim.Adam(**opt_args)
+        optimizer_def = flax.optim.Adam(**opt_args)
     elif name == 'rmsprop':
         _erase(opt_args, ('beta1', 'weight_decay'))
-        optimizer = flax.optim.RMSProp(**opt_args)
+        optimizer_def = flax.optim.RMSProp(**opt_args)
     elif name == 'rmsproptf':
-        optimizer = RMSPropTensorflow(**opt_args)
+        optimizer_def = RMSPropTensorflow(**opt_args)
     else:
         assert False, f"Invalid optimizer name specified ({name})"
 
-    optimizer = optimizer.create(params)
+    optimizer = optimizer_def.create(params)
     return optimizer
