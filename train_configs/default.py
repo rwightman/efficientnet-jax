@@ -31,42 +31,42 @@ import ml_collections
 
 
 def get_config():
-  """Get the default hyperparameter configuration."""
-  config = ml_collections.ConfigDict()
+    """Get the default hyperparameter configuration."""
+    config = ml_collections.ConfigDict()
 
-  config.data_dir = '/data/'  # use --config.data_dir arg to set without modifying config file
-  config.dataset = 'imagenet2012:5.0.0'
-  config.num_classes = 1000  # FIXME not currently used
+    config.data_dir = '/data/'  # use --config.data_dir arg to set without modifying config file
+    config.dataset = 'imagenet2012:5.0.0'
+    config.num_classes = 1000  # FIXME not currently used
 
-  config.model = 'tf_efficientnet_b0'
-  config.image_size = 0  # set from model defaults if 0
-  config.batch_size = 500
-  config.lr = 0.016
-  config.label_smoothing = 0.1
-  config.weight_decay = 1e-5  # l2 weight penalty added to loss
-  config.ema_decay = .9997
+    config.model = 'tf_efficientnet_b0'
+    config.image_size = 0  # set from model defaults if 0
+    config.batch_size = 200
+    config.lr = 0.016
+    config.label_smoothing = 0.1
+    config.weight_decay = 1e-5  # l2 weight penalty added to loss
+    config.ema_decay = .99997
 
-  config.opt = 'rmsproptf'
-  config.opt_eps = .001
-  config.opt_beta1 = 0.9
-  config.opt_beta2 = 0.9
-  config.opt_weight_decay = 0.  # by default, weight decay not applied in opt, l2 penalty above is used
+    config.opt = 'rmsproptf'
+    config.opt_eps = .001
+    config.opt_beta1 = 0.9
+    config.opt_beta2 = 0.9
+    config.opt_weight_decay = 0.  # by default, weight decay not applied in opt, l2 penalty above is used
 
-  config.lr_schedule = 'step'
-  config.lr_decay_rate = 0.97
-  config.lr_decay_epochs = 2.4
-  config.lr_warmup_epochs = 5.
-  config.lr_minimum = 1e-6
-  config.num_epochs = 450
+    config.lr_schedule = 'step'
+    config.lr_decay_rate = 0.97
+    config.lr_decay_epochs = 2.4
+    config.lr_warmup_epochs = 5.
+    config.lr_minimum = 1e-6
+    config.num_epochs = 450
 
-  config.cache = False
-  config.half_precision = True
+    config.cache = False
+    config.half_precision = True
 
-  config.drop_rate = 0.2
-  config.drop_path_rate = 0.1
+    config.drop_rate = 0.2
+    config.drop_path_rate = 0.2
 
-  # If num_train_steps==-1 then the number of training steps is calculated from
-  # num_epochs using the entire dataset. Similarly for steps_per_eval.
-  config.num_train_steps = -1
-  config.steps_per_eval = -1
-  return config
+    # If num_train_steps==-1 then the number of training steps is calculated from
+    # num_epochs using the entire dataset. Similarly for steps_per_eval.
+    config.num_train_steps = -1
+    config.steps_per_eval = -1
+    return config
