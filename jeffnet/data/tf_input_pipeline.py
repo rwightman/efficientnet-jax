@@ -168,8 +168,8 @@ def preprocess_for_train(
       A preprocessed image `Tensor`.
     """
     image = decode_and_random_crop(image_bytes, image_size, interpolation)
-    image = tf.reshape(image, [image_size, image_size, 3])
     image = tf.image.random_flip_left_right(image)
+    image = tf.reshape(image, [image_size, image_size, 3])
     image = normalize_image(image, mean=mean, std=std)
     image = tf.image.convert_image_dtype(image, dtype=dtype)
     return image

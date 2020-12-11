@@ -110,7 +110,7 @@ def _filter(state_dict):
     return out
 
 
-def create_model(variant, pretrained=False, rng=None, input_shape=None, **kwargs):
+def create_model(variant, pretrained=False, rng=None, input_shape=None, dtype=jnp.float32, **kwargs):
     model_cfg = get_model_cfg(variant)
     model_args = model_cfg['arch_fn'](variant, **model_cfg['arch_cfg'])
     model_args.update(kwargs)
@@ -130,7 +130,7 @@ def create_model(variant, pretrained=False, rng=None, input_shape=None, **kwargs
 
     model_args['act_fn'] = get_act_fn(model_args.pop('act_fn', 'relu'))  # convert str -> fn
 
-    model = EfficientNet(**model_args)
+    model = EfficientNet(dtype=dtype, **model_args)
     model.default_cfg = model_cfg['default_cfg']
 
     rng = jax.random.PRNGKey(0) if rng is None else rng
@@ -145,8 +145,8 @@ def create_model(variant, pretrained=False, rng=None, input_shape=None, **kwargs
 
     variables = model.init(
         {'params': params_rng, 'dropout': dropout_rng},
-        jnp.ones(input_shape, jnp.float32),
-        training=True)
+        jnp.ones(input_shape, dtype=dtype),
+        training=False)
 
     if pretrained:
         variables = load_pretrained(variables, default_cfg=model.default_cfg, filter_fn=_filter)

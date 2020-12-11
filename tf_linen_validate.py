@@ -9,7 +9,6 @@ import jax
 import flax
 import tensorflow_datasets as tfds
 
-import jeffnet.data.tf_imagenet_data as imagenet_data
 import jeffnet.data.tf_input_pipeline as input_pipeline
 from jeffnet.common import correct_topk, AverageMeter, list_models, get_model_cfg
 from jeffnet.linen import create_model
@@ -42,9 +41,9 @@ def validate(args):
     print(f'Created {args.model} model. Validating...')
 
     if args.no_jit:
-        eval_step = lambda images, labels: eval_forward(model, variables, images, labels)
+        eval_step = lambda images, labels: eval_forward(model.apply, variables, images, labels)
     else:
-        eval_step = jax.jit(lambda images, labels: eval_forward(model, variables, images, labels))
+        eval_step = jax.jit(lambda images, labels: eval_forward(model.apply, variables, images, labels))
 
     """Runs evaluation and returns top-1 accuracy."""
     image_size = model.default_cfg['input_size'][-1]
@@ -103,8 +102,8 @@ def create_eval_iter(data_dir, batch_size, image_size, half_precision=False,
     return it, num_batches
 
 
-def eval_forward(model, variables, images, labels):
-    logits = model.apply(variables, images, mutable=False, training=False)
+def eval_forward(apply_fn, variables, images, labels):
+    logits = apply_fn(variables, images, mutable=False, training=False)
     top1_count, top5_count = correct_topk(logits, labels, topk=(1, 5))
     return top1_count, top5_count
 

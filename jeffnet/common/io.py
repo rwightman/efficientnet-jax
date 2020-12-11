@@ -2,7 +2,7 @@
 
 Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
 """
-
+import os
 import numpy as np
 import jax.numpy as jnp
 
@@ -50,3 +50,19 @@ def split_state_dict(state_dict):
         else:
             out_params[k] = v
     return out_params, out_state
+
+
+def get_outdir(path, *paths, retry_inc=False):
+    outdir = os.path.join(path, *paths)
+    if not os.path.exists(outdir):
+        os.makedirs(outdir)
+    elif retry_inc:
+        count = 1
+        outdir_inc = outdir + '-' + str(count)
+        while os.path.exists(outdir_inc):
+            count = count + 1
+            outdir_inc = outdir + '-' + str(count)
+            assert count < 100
+        outdir = outdir_inc
+        os.makedirs(outdir)
+    return outdir

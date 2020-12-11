@@ -8,8 +8,9 @@ def get_config():
     config = default_lib.get_config()
 
     config.model = 'pt_efficientnet_b3'
-    config.batch_size = 2000
-    config.ema_decay = .99993
+    config.batch_size = 2048
+    config.eval_batch_size = 1000
+    config.ema_decay = .9999
     config.num_epochs = 550
     config.drop_rate = 0.3
 

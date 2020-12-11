@@ -34,6 +34,9 @@ def get_config():
     """Get the default hyperparameter configuration."""
     config = ml_collections.ConfigDict()
 
+    # base output directory for experiments (checkpoints, summaries), './output' if not valid
+    config.output_base_dir = ''
+
     config.data_dir = '/data/'  # use --config.data_dir arg to set without modifying config file
     config.dataset = 'imagenet2012:5.0.0'
     config.num_classes = 1000  # FIXME not currently used
@@ -41,6 +44,7 @@ def get_config():
     config.model = 'tf_efficientnet_b0'
     config.image_size = 0  # set from model defaults if 0
     config.batch_size = 200
+    config.eval_batch_size = 0  # set to config.bach_size if 0
     config.lr = 0.016
     config.label_smoothing = 0.1
     config.weight_decay = 1e-5  # l2 weight penalty added to loss

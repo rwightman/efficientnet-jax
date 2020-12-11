@@ -23,6 +23,7 @@ import os
 import functools
 import time
 from typing import Any
+from datetime import datetime
 
 import ml_collections
 from ml_collections import config_flags
@@ -43,7 +44,7 @@ import jax.numpy as jnp
 import tensorflow_datasets as tfds
 
 import jeffnet.data.tf_input_pipeline as input_pipeline
-from jeffnet.common import acc_topk, create_lr_schedule_epochs, cross_entropy_loss
+from jeffnet.common import acc_topk, create_lr_schedule_epochs, cross_entropy_loss, get_outdir
 from jeffnet.linen import create_model, create_optim, EmaState
 
 # enable jax omnistaging
@@ -187,7 +188,11 @@ def sync_batch_stats(state):
     """Sync the batch statistics across replicas."""
     avg = jax.pmap(lambda x: lax.pmean(x, 'x'), 'x')
     new_model_state = state.model_state.copy({'batch_stats': avg(state.model_state['batch_stats'])})
-    return state.replace(model_state=new_model_state)
+    if state.ema is not None:
+        new_ema_model_state = state.ema.model_state.copy({'batch_stats': avg(state.ema.model_state['batch_stats'])})
+        return state.replace(model_state=new_model_state, ema=state.ema.replace(model_state=new_ema_model_state))
+    else:
+        return state.replace(model_state=new_model_state)
 
 
 def lr_prefetch_iter(
@@ -202,23 +207,22 @@ def lr_prefetch_iter(
     return flax.jax_utils.prefetch_to_device(lr_iter, prefetch_to_device, devices=devices)
 
 
-def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
+def train_and_evaluate(config: ml_collections.ConfigDict, resume: str):
     """Execute model training and evaluation loop.
 
     Args:
       config: Hyperparameter configuration for training and evaluation.
-      model_dir: Directory where the tensorboard summaries are written to.
+      resume: Resume from checkpoints at specified dir if set (TDDO: support specific checkpoint file/step)
     """
-
-    if jax.host_id() == 0:
-        summary_writer = tensorboard.SummaryWriter(model_dir)
-        summary_writer.hparams(dict(config))
-
     rng = random.PRNGKey(42)
 
     if config.batch_size % jax.device_count() > 0:
         raise ValueError('Batch size must be divisible by the number of devices')
     local_batch_size = config.batch_size // jax.host_count()
+    config.eval_batch_size = config.eval_batch_size or config.batch_size
+    if config.eval_batch_size % jax.device_count() > 0:
+        raise ValueError('Validation batch size must be divisible by the number of devices')
+    local_eval_batch_size = config.eval_batch_size // jax.host_count()
 
     platform = jax.local_devices()[0].platform
     half_prec = config.half_precision
@@ -247,7 +251,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
         image_size=image_size, half_precision=half_prec, cache=config.cache)
 
     eval_iter = create_input_iter(
-        dataset_builder, local_batch_size, train=False,
+        dataset_builder, local_eval_batch_size, train=False,
         image_size=image_size, half_precision=half_prec, cache=config.cache)
 
     steps_per_epoch = dataset_builder.info.splits['train'].num_examples // config.batch_size
@@ -259,7 +263,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
 
     if config.steps_per_eval == -1:
         num_validation_examples = dataset_builder.info.splits['validation'].num_examples
-        steps_per_eval = num_validation_examples // config.batch_size
+        steps_per_eval = num_validation_examples // config.eval_batch_size
     else:
         steps_per_eval = config.steps_per_eval
 
@@ -268,7 +272,8 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
     base_lr = config.lr * config.batch_size / 256.
 
     state = create_train_state(config, params, model_state)
-    state = restore_checkpoint(state, model_dir)
+    if resume:
+        state = restore_checkpoint(state, resume)
     # step_offset > 0 if restarting from checkpoint
     step_offset = int(state.step)
     state = flax.jax_utils.replicate(state)
@@ -290,6 +295,19 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
     p_eval_step_ema = None
     if config.ema_decay != 0.:
         p_eval_step_ema = jax.pmap(functools.partial(eval_step_ema, model.apply), axis_name='batch')
+
+    if jax.host_id() == 0:
+        if resume and step_offset > 0:
+            output_dir = resume
+        else:
+            output_base = config.output_base_dir if config.output_base_dir else './output'
+            exp_name = '-'.join([
+                datetime.now().strftime("%Y%m%d-%H%M%S"),
+                config.model
+            ])
+            output_dir = get_outdir(output_base, exp_name)
+        summary_writer = tensorboard.SummaryWriter(output_dir)
+        summary_writer.hparams(dict(config))
 
     epoch_metrics = []
     t_loop_start = time.time()
@@ -360,7 +378,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
 
         if step_p1 % steps_per_checkpoint == 0 or step_p1 == num_steps:
             state = sync_batch_stats(state)
-            save_checkpoint(state, model_dir)
+            save_checkpoint(state, output_dir)
 
     # Wait until computations are done before exiting
     jax.random.normal(jax.random.PRNGKey(0), ()).block_until_ready()
@@ -369,7 +387,7 @@ def train_and_evaluate(config: ml_collections.ConfigDict, model_dir: str):
 FLAGS = flags.FLAGS
 
 flags.DEFINE_string(
-    'model_dir', default='./output', help='Directory to store model data.')
+    'resume', default='', help='Output path to resume session from (if set).')
 
 config_flags.DEFINE_config_file(
     'config', os.path.join(os.path.dirname(__file__), 'train_configs/default.py'),
@@ -383,7 +401,7 @@ def main(argv):
     print('JAX host: %d / %d' % (jax.host_id(), jax.host_count()))
     print('JAX devices:\n%s' % '\n'.join(str(d) for d in jax.devices()), flush=True)
 
-    train_and_evaluate(model_dir=FLAGS.model_dir, config=FLAGS.config)
+    train_and_evaluate(config=FLAGS.config, resume=FLAGS.resume)
 
 
 if __name__ == '__main__':

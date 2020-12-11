@@ -7,8 +7,8 @@ RUN pip install --upgrade pip
 RUN git clone https://github.com/google/jax &&\
     cd jax &&\
     python build/build.py --enable_cuda &&\
-    pip install -e build &&\
-    pip install -e . && \
+    pip install dist/*.whl &&\
+    pip install -e . &&\
     rm -rf /root/.cache/bazel && \
     cd ..
 
