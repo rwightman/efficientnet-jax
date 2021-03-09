@@ -74,6 +74,7 @@ def load(
         batch_dims: Sequence[int],
         image_size: int = IMAGE_SIZE,
         chw: bool = False,
+        dataset_name='imagenet2012:5.0.0',
         mean: Optional[Tuple[float]] = None,
         std: Optional[Tuple[float]] = None,
         interpolation: str = 'bicubic',
@@ -88,7 +89,7 @@ def load(
         start, end = _shard(split, 0, 1)
     tfds_split = tfds.core.ReadInstruction(_to_tfds_split(split), from_=start, to=end, unit='abs')
     ds = tfds.load(
-        'imagenet2012:5.*.*',
+        dataset_name,
         split=tfds_split,
         decoders={'image': tfds.decode.SkipDecoding()},
         data_dir=tfds_data_dir)

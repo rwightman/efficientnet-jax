@@ -1,24 +1,30 @@
 # EfficientNet JAX - Flax Linen and Objax
 
 ## Intro
-This is very much a giant steaming work in progress. The two JAX dressings I am using -- Objax (https://github.com/google/objax), and Flax Linen (https://github.com/google/flax/tree/master/flax/linen) -- are also shifting week to week. No effort will be made to maintain backwards compatibility as I continue. It will break.
+This is very much a giant steaming work in progress. Jax, jaxlib, and the NN libraries I'm using are shifting week to week.
+
+This code base currently supports:
+ * Flax Linen (https://github.com/google/flax/tree/master/flax/linen) -- for models, validation w/ pretrained weights, and training from scratch
+ * Objax (https://github.com/google/objax) -- for model and model validation with pretrained weights
 
 This is essentially an adaptation of my PyTorch EfficienNet generator code (https://github.com/rwightman/gen-efficientnet-pytorch and also found in https://github.com/rwightman/pytorch-image-models) to JAX.
 
-I started this to:
-* learn JAX by working with familiar code / models as a starting point
-* figure out which JAX modelling interface libraries ('frameworks') I liked
+I started this to
+* learn JAX by working with familiar code / models as a starting point,
+* figure out which JAX modelling interface libraries ('frameworks') I liked,
 * compare the training / inference runtime traits of non-trivial models across combinations of PyTorch, JAX, GPU and TPU in order to drive cost optimizations for scaling up of future projects
 
 Where are we at:
+* Training works on single node, multi-GPU and TPU v3-8 for Flax Linen variants w/ Tensorflow Datasets based pipeline
 * The Objax and Flax Linen (nn.compact) variants of models are working (for inference) 
 * Weights are ported from PyTorch (my timm training) and Tensorflow (original paper author releases) and are organized in zoo of sorts (borrowed PyTorch code) 
 * Tensorflow and PyTorch data pipeline based validation scripts work with models and weights. For PT pipeline with PT models and TF pipeline with TF models the results are pretty much exact.
 
 TODO:
-- [ ] Fixup model weight inits (not currently correct), fix dropout/drop path impl and other training specifics.
+- [x] Fix model weight inits (working for Flax Linen variants)
+- [x] Fix dropout/drop path impl and other training specifics (verified for Flax Linen variants)
 - [ ] Add more instructions / help in the README on how to get an optimal environment with JAX up and running (with GPU support)
-- [ ] Add basic training code. The main point of this is to scale up training.
+- [x] Add basic training code. The main point of this is to scale up training.
 - [ ] Add more advance data augmentation pipeline 
 - [ ] Training on lots of GPUs
 - [ ] Training on lots of TPUs
@@ -123,21 +129,26 @@ Working with JAX I've found the best approach for having a working GPU compatibl
 There are several container definitions in `docker/`. They use NGC containers as their parent image so you'll need to be setup to pull NGC containers: https://www.nvidia.com/en-us/gpu-cloud/containers/ . I'm currently using recent NGC containers w/ CUDA 11.1 support, the host system will need a very recent NVIDIA driver to support this but doesn't need a matching CUDA 11.1 / cuDNN 8 install.
 
 Current dockerfiles:
-* `pt_git.Dockerfile` - PyTorch 20.10 NGC as parent, CUDA 11.1, cuDNN 8. git (source install) of jaxlib, jax, objax, and flax.
-* `pt_pip.Dockerfile` - PyTorch 20.10 NGC as parent, CUDA 11.1, cuDNN 8. pip (latest ver) install of jaxlib, jax, objax, and flax.
-* `tf_git.Dockerfile` - Tensorflow 2 20.10 NGC as parent, CUDA 11.1, cuDNN 8. git (source install) of jaxlib, jax, objax, and flax.
-* `tf_pip.Dockerfile` - Tensorflow 2 20.10 NGC as parent, CUDA 11.1, cuDNN 8. pip (latest ver) install of jaxlib, jax, objax, and flax.
+* `pt_git.Dockerfile` - PyTorch 20.12 NGC as parent, CUDA 11.1, cuDNN 8. git (source install) of jaxlib, jax, objax, and flax.
+* `pt_pip.Dockerfile` - PyTorch 20.12 NGC as parent, CUDA 11.1, cuDNN 8. pip (latest ver) install of jaxlib, jax, objax, and flax.
+* `tf_git.Dockerfile` - Tensorflow 2 21.02 NGC as parent, CUDA 11.2, cuDNN 8. git (source install) of jaxlib, jax, objax, and flax.
+* `tf_pip.Dockerfile` - Tensorflow 2 21.02 NGC as parent, CUDA 11.2, cuDNN 8. pip (latest ver) install of jaxlib, jax, objax, and flax.
 
 The 'git' containers take some time to build jaxlib, they pull the masters of all respective repos so are up to the bleeding edge but more likely to have possible regression or incompatibilities that go with that. The pip install containers are quite a bit quicker to get up and running, based on the latest pip versions of all repos.
 
-### Docker Usage
+### Docker Usage (GPU)
 
 1. Make sure you have a recent version of docker and the NVIDIA Container Toolkit setup (https://github.com/NVIDIA/nvidia-docker) 
-2. Build the container `docker build -f docker/tf_pip.Dockerfile -t jax_tf_pip`
+2. Build the container `docker build -f docker/tf_pip.Dockerfile -t jax_tf_pip .`
 3. Run the container, ideally map jeffnet and datasets (ImageNet) into the container
     * For tf containers, `docker run --gpus all -it -v /path/to/tfds/root:/data/ -v /path/to/efficientnet-jax/:/workspace/jeffnet --rm --ipc=host jax_tf_pip`
     * For pt containers, `docker run --gpus all -it -v /path/to/imagenet/root:/data/ -v /path/to/efficientnet-jax/:/workspace/jeffnet --rm --ipc=host jax_pt_pip`
-4. Running validation (once inside running container):
+4. Model validation w/ pretrained weights (once inside running container):
     * For tf, in `worskpace/jeffnet`, `python tf_linen_validate.py /data/ --model tf_efficientnet_b0_ns`
     * For pt, in `worskpace/jeffnet`, `python pt_objax_validate.py /data/validation --model pt_efficientnet_b0`
+5. Training (within container)
+    * In `worskpace/jeffnet`, `tf_linen_train.py --config train_configs/tf_efficientnet_b0-gpu_24gb_x2.py --config.data_dir /data`
 
+### TPU
+
+I've successfully used this codebase on TPU VM environments as is. Any of the `tpu_x8` training configs should work out of the box on a v3-8 TPU. I have not tackled training with TPU Pods.

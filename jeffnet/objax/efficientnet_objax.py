@@ -7,7 +7,6 @@ from functools import partial
 
 import objax.nn as nn
 import objax.functional as F
-import jax.nn.functions as jnnf
 from objax import Module
 from objax.typing import JaxArray
 

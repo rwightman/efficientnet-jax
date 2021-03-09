@@ -7,7 +7,7 @@ import os
 import time
 
 import jax
-from timm.data import Dataset, DatasetTar, create_loader, resolve_data_config
+from timm.data import create_dataset, create_loader, resolve_data_config
 
 from jeffnet.common import get_model_cfg, list_models, correct_topk, AverageMeter
 from jeffnet.linen import create_model
@@ -32,10 +32,7 @@ def validate(args):
     else:
         eval_step = jax.jit(lambda images, labels: eval_forward(model, variables, images, labels))
 
-    if os.path.splitext(args.data)[1] == '.tar' and os.path.isfile(args.data):
-        dataset = DatasetTar(args.data)
-    else:
-        dataset = Dataset(args.data)
+    dataset = create_dataset('imagenet', args.data)
 
     data_config = resolve_data_config(vars(args), model=model)
     loader = create_loader(

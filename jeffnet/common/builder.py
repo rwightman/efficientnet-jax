@@ -108,7 +108,6 @@ class EfficientNetBuilder:
         # outer list of block_args defines the stacks
         for stage_idx, stage_defs in enumerate(self.block_defs):
             _log_info_if('Stack: {}'.format(stage_idx), self.verbose)
-            assert isinstance(stage_defs, list)
 
             blocks = []
             # each stage contains a list of block types and arguments
@@ -116,7 +115,7 @@ class EfficientNetBuilder:
                 _log_info_if(' Block: {}'.format(block_idx), self.verbose)
                 last_block = block_idx + 1 == len(stage_defs)
                 block_type, block_args = block_def
-                block_args = block_args.copy()  # shallow copy, so we can stomp int args
+                block_args = dict(**block_args)
 
                 assert block_args['stride'] in (1, 2)
                 if block_idx >= 1:   # only the first block in any stack can have a stride > 1

@@ -15,14 +15,14 @@ PRNGKey = Any
 
 
 class Dropout(nn.Module):
-    """Create a dropout layer.
-      Args:
-        rate: the dropout probability.  (_not_ the keep rate!)
-      """
+    """ Dropout layer.
+        Attributes:
+            rate: the dropout probability.  (_not_ the keep rate!)
+    """
     rate: float
 
     @nn.compact
-    def __call__(self, x, training=False, rng=None):
+    def __call__(self, x, training: bool, rng: PRNGKey = None):
         """Applies a random dropout mask to the input.
         Args:
             x: the inputs that should be randomly masked.
@@ -53,7 +53,7 @@ def drop_path(x: jnp.array, drop_rate: float = 0., rng=None) -> jnp.array:
     """
     if drop_rate == 0.:
         return x
-    keep_prob = 1 - drop_rate
+    keep_prob = 1. - drop_rate
     if rng is None:
         rng = make_rng()
     mask = random.bernoulli(key=rng, p=keep_prob, shape=(x.shape[0], 1, 1, 1))
@@ -65,12 +65,9 @@ class DropPath(nn.Module):
     rate: float = 0.
 
     @nn.compact
-    def __call__(self, x, training: bool = True, rng: PRNGKey = None):
+    def __call__(self, x, training: bool, rng: PRNGKey = None):
         if not training or self.rate == 0.:
             return x
         if rng is None:
             rng = self.make_rng('dropout')
         return drop_path(x, self.rate, rng)
-
-
-# TDDO DropBlock

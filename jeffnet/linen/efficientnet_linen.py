@@ -51,6 +51,9 @@ class EfficientNet(nn.Module):
     num_features: int = 1280
     global_pool: str = 'avg'
 
+    # pretrained / data config
+    default_cfg: Dict = None
+
     # regularization
     drop_rate: float = 0.
     drop_path_rate: float = 0.
@@ -130,8 +133,7 @@ def create_model(variant, pretrained=False, rng=None, input_shape=None, dtype=jn
 
     model_args['act_fn'] = get_act_fn(model_args.pop('act_fn', 'relu'))  # convert str -> fn
 
-    model = EfficientNet(dtype=dtype, **model_args)
-    model.default_cfg = model_cfg['default_cfg']
+    model = EfficientNet(dtype=dtype, default_cfg=model_cfg['default_cfg'], **model_args)
 
     rng = jax.random.PRNGKey(0) if rng is None else rng
     params_rng, dropout_rng = jax.random.split(rng)

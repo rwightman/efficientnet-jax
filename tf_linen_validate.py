@@ -49,7 +49,8 @@ def validate(args):
     image_size = model.default_cfg['input_size'][-1]
 
     eval_iter, num_batches = create_eval_iter(
-        args.data, args.batch_size, image_size, args.half_precision,
+        args.data, args.batch_size, image_size,
+        half_precision=args.half_precision,
         mean=tuple([x * 255 for x in model.default_cfg['mean']]),
         std=tuple([x * 255 for x in model.default_cfg['std']]),
         interpolation=model.default_cfg['interpolation'],
@@ -90,9 +91,9 @@ def prepare_tf_data(xs):
     return jax.tree_map(_prepare, xs)
 
 
-def create_eval_iter(data_dir, batch_size, image_size, half_precision=False,
+def create_eval_iter(data_dir, batch_size, image_size, dataset_name='imagenet2012:5.0.0', half_precision=False,
                      mean=None, std=None, interpolation='bicubic'):
-    dataset_builder = tfds.builder('imagenet2012:5.*.*', data_dir=data_dir)
+    dataset_builder = tfds.builder(dataset_name, data_dir=data_dir)
     assert dataset_builder.info.splits['validation'].num_examples % batch_size == 0
     num_batches = dataset_builder.info.splits['validation'].num_examples // batch_size
     ds = input_pipeline.create_split(

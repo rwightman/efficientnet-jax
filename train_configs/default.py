@@ -43,8 +43,8 @@ def get_config():
 
     config.model = 'tf_efficientnet_b0'
     config.image_size = 0  # set from model defaults if 0
-    config.batch_size = 200
-    config.eval_batch_size = 0  # set to config.bach_size if 0
+    config.batch_size = 224
+    config.eval_batch_size = 100  # set to config.bach_size if 0
     config.lr = 0.016
     config.label_smoothing = 0.1
     config.weight_decay = 1e-5  # l2 weight penalty added to loss

@@ -79,7 +79,7 @@ class ConvBnAct(nn.Module):
         x = self.conv_layer(
             self.out_features, self.kernel_size, stride=self.stride,
             dilation=self.dilation, padding=self.pad_type, name='conv')(x)
-        x = self.norm_layer(name='bn', training=training)(x)
+        x = self.norm_layer(name='bn')(x, training=training)
         x = self.act_fn(x)
         return x
 
@@ -114,7 +114,7 @@ class DepthwiseSeparable(nn.Module):
         x = create_conv(
             self.in_features, self.dw_kernel_size, stride=self.stride, dilation=self.dilation,
             padding=self.pad_type, depthwise=True, conv_layer=self.conv_layer, name='conv_dw')(x)
-        x = self.norm_layer(name='bn_dw', training=training)(x)
+        x = self.norm_layer(name='bn_dw')(x, training=training)
         x = self.act_fn(x)
 
         if self.se_layer is not None and self.se_ratio > 0:
@@ -125,7 +125,7 @@ class DepthwiseSeparable(nn.Module):
         x = create_conv(
             self.out_features, self.pw_kernel_size, padding=self.pad_type,
             conv_layer=self.conv_layer, name='conv_pw')(x)
-        x = self.norm_layer(name='bn_pw', training=training)(x)
+        x = self.norm_layer(name='bn_pw')(x, training=training)
         if self.pw_act:
             x = self.act_fn(x)
 
@@ -166,13 +166,13 @@ class InvertedResidual(nn.Module):
         if self.exp_ratio > 1.:
             x = create_conv(
                 features, self.exp_kernel_size, padding=self.pad_type, conv_layer=self.conv_layer, name='conv_exp')(x)
-            x = self.norm_layer(name='bn_exp', training=training)(x)
+            x = self.norm_layer(name='bn_exp')(x, training=training)
             x = self.act_fn(x)
 
         x = create_conv(
             features, self.dw_kernel_size, stride=self.stride, dilation=self.dilation,
             padding=self.pad_type, depthwise=True, conv_layer=self.conv_layer, name='conv_dw')(x)
-        x = self.norm_layer(name='bn_dw', training=training)(x)
+        x = self.norm_layer(name='bn_dw')(x, training=training)
         x = self.act_fn(x)
 
         if self.se_layer is not None and self.se_ratio > 0:
@@ -183,7 +183,7 @@ class InvertedResidual(nn.Module):
         x = create_conv(
             self.out_features, self.pw_kernel_size, padding=self.pad_type,
             conv_layer=self.conv_layer, name='conv_pwl')(x)
-        x = self.norm_layer(name='bn_pwl', training=training)(x)
+        x = self.norm_layer(name='bn_pwl')(x, training=training)
 
         if (self.stride == 1 and self.in_features == self.out_features) and not self.noskip:
             x = DropPath(self.drop_path_rate)(x, training=training)
@@ -221,7 +221,7 @@ class EdgeResidual(nn.Module):
         # Point-wise expansion
         x = create_conv(
             features, self.exp_kernel_size, padding=self.pad_type, conv_layer=self.conv_layer, name='conv_exp')(x)
-        x = self.norm_layer(name='bn_exp', training=training)(x)
+        x = self.norm_layer(name='bn_exp')(x, training=training)
         x = self.act_fn(x)
 
         if self.se_layer is not None and self.se_ratio > 0:
@@ -232,7 +232,7 @@ class EdgeResidual(nn.Module):
         x = create_conv(
             self.out_features, self.pw_kernel_size, stride=self.stride, dilation=self.dilation,
             padding=self.pad_type, conv_layer=self.conv_layer, name='conv_pwl')(x)
-        x = self.norm_layer(name='bn_pwl', training=training)(x)
+        x = self.norm_layer(name='bn_pwl')(x, training=training)
 
         if (self.stride == 1 and self.in_features == self.out_features) and not self.noskip:
             x = DropPath(self.drop_path_rate)(x, training=training)
@@ -256,7 +256,7 @@ class Head(nn.Module):
     @nn.compact
     def __call__(self, x, training: bool):
         x = self.conv_layer(self.num_features, 1, name='conv_pw')(x)
-        x = self.norm_layer(name='bn', training=training)(x)
+        x = self.norm_layer(name='bn')(x, training=training)
         x = self.act_fn(x)
         if self.global_pool == 'avg':
             x = jnp.asarray(x, jnp.float32)
