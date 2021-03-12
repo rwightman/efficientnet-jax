@@ -82,6 +82,6 @@ def rmsprop_momentum(
         )
     return optax.chain(
         optax.scale_by_rms(decay=decay, eps=eps),
-        _scale_by_learning_rate(-learning_rate),
+        _scale_by_learning_rate(learning_rate),
         optax.trace(decay=momentum, nesterov=nesterov)
     )
