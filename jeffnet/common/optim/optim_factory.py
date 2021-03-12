@@ -1,5 +1,7 @@
 import optax
-from .optax_custom import rmsprop_tensorflow, rmsprop_momentum
+
+from .lars import lars
+from .rmsprop import rmsprop_tensorflow, rmsprop
 
 
 def _rename(kwargs, originals, new):
@@ -35,12 +37,13 @@ def create_optax_optim(name, learning_rate=None, momentum=0.9, weight_decay=0, *
     _rename(opt_args, ('beta1', 'beta2'), ('b1', 'b2'))
     if name == 'sgd' or name == 'momentum' or name == 'nesterov':
         _erase(opt_args, ('eps',))
-        if name == 'sgd':
-            optimizer = optax.sgd(momentum=0, **opt_args)
-        elif name == 'momentum':
+        if name == 'momentum':
             optimizer = optax.sgd(momentum=momentum, **opt_args)
         elif name == 'nesterov':
             optimizer = optax.sgd(momentum=momentum, nesterov=True)
+        else:
+            assert name == 'sgd'
+            optimizer = optax.sgd(momentum=0, **opt_args)
     elif name == 'adabelief':
         optimizer = optax.adabelief(**opt_args)
     elif name == 'adam' or name == 'adamw':
@@ -50,12 +53,12 @@ def create_optax_optim(name, learning_rate=None, momentum=0.9, weight_decay=0, *
             optimizer = optax.adam(**opt_args)
     elif name == 'lamb':
         optimizer = optax.lamb(weight_decay=weight_decay, **opt_args)
+    elif name == 'lars':
+        optimizer = lars(weight_decay=weight_decay, **opt_args)
     elif name == 'rmsprop':
-        optimizer = optax.rmsprop(**opt_args)
+        optimizer = rmsprop(momentum=momentum, **opt_args)
     elif name == 'rmsproptf':
-        optimizer = rmsprop_tensorflow(**opt_args)
-    elif name == 'rmspropm':
-        optimizer = rmsprop_momentum(**opt_args)
+        optimizer = rmsprop_tensorflow(momentum=momentum, **opt_args)
     else:
         assert False, f"Invalid optimizer name specified ({name})"
 
