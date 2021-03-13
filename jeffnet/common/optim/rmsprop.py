@@ -64,43 +64,23 @@ def scale_by_stddev(decay: float = 0.9, eps: float = 1e-8, initial_scale: float 
     return optax.GradientTransformation(init_fn, update_fn)
 
 
-def rmsprop_tensorflow(
-        learning_rate: ScalarOrSchedule,
-        decay: float = 0.9,
-        momentum: float = 0.,
-        eps: float = 1e-8,
-        centered: bool = False,
-        nesterov: bool = False) -> optax.GradientTransformation:
-
-    if centered:
-        return optax.chain(
-            scale_by_stddev(decay=decay, eps=eps, initial_scale=1.0),
-            scale_by_learning_rate(learning_rate),
-            optax.trace(decay=momentum, nesterov=nesterov)
-        )
-    return optax.chain(
-        scale_by_rms(decay=decay, eps=eps, initial_scale=1.0),
-        scale_by_learning_rate(learning_rate),
-        optax.trace(decay=momentum, nesterov=nesterov),
-    )
-
-
 def rmsprop(
         learning_rate: ScalarOrSchedule,
         decay: float = 0.9,
         momentum: float = 0.,
         eps: float = 1e-8,
         centered: bool = False,
-        nesterov: bool = False) -> optax.GradientTransformation:
+        nesterov: bool = False,
+        initial_scale: float = 0.) -> optax.GradientTransformation:
 
     if centered:
         return optax.chain(
-            scale_by_stddev(decay=decay, eps=eps),
+            scale_by_stddev(decay=decay, eps=eps, initial_scale=initial_scale),
             scale_by_learning_rate(learning_rate),
-            optax.trace(decay=momentum, nesterov=nesterov)
+            optax.trace(decay=momentum, nesterov=nesterov) if momentum > 0 else optax.identity()
         )
     return optax.chain(
-        scale_by_rms(decay=decay, eps=eps),
+        scale_by_rms(decay=decay, eps=eps, initial_scale=initial_scale),
         scale_by_learning_rate(learning_rate),
-        optax.trace(decay=momentum, nesterov=nesterov)
+        optax.trace(decay=momentum, nesterov=nesterov) if momentum > 0 else optax.identity()
     )

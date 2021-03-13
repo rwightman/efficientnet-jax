@@ -1,7 +1,7 @@
 import optax
 
 from .lars import lars
-from .rmsprop import rmsprop_tensorflow, rmsprop
+from .rmsprop import rmsprop
 
 
 def _rename(kwargs, originals, new):
@@ -58,7 +58,7 @@ def create_optax_optim(name, learning_rate=None, momentum=0.9, weight_decay=0, *
     elif name == 'rmsprop':
         optimizer = rmsprop(momentum=momentum, **opt_args)
     elif name == 'rmsproptf':
-        optimizer = rmsprop_tensorflow(momentum=momentum, **opt_args)
+        optimizer = rmsprop(momentum=momentum, initial_scale=1.0, **opt_args)
     else:
         assert False, f"Invalid optimizer name specified ({name})"
 
