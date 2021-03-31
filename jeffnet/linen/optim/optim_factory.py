@@ -1,5 +1,6 @@
 import flax.optim
 from .rmsprop_tensorflow import RMSPropTensorflow
+from .shampoo import Shampoo
 
 
 def _rename(kwargs, originals, new):
@@ -60,6 +61,9 @@ def create_optim(name, params, learning_rate=None, weight_decay=0, **kwargs):
         optimizer_def = flax.optim.RMSProp(**opt_args)
     elif name == 'rmsproptf':
         optimizer_def = RMSPropTensorflow(**opt_args)
+    elif name == 'shampoo':
+        _erase(opt_args, ('eps',))
+        optimizer_def = Shampoo(**opt_args)
     else:
         assert False, f"Invalid optimizer name specified ({name})"
 
