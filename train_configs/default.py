@@ -50,10 +50,17 @@ def get_config():
     config.weight_decay = 1e-5  # l2 weight penalty added to loss
     config.ema_decay = .99997
 
+    #config.opt = 'adamw'
+    #config.opt = 'lars'
+    #config.opt_eps = 1e-6
+    #config.opt_beta1 = 0.9
+    #config.opt_beta2 = 0.999
+    #config.opt_weight_decay = 0.00001  # by default, weight decay not applied in opt, l2 penalty above is used
+
     config.opt = 'rmsproptf'
     config.opt_eps = .001
-    config.opt_beta1 = 0.9
-    config.opt_beta2 = 0.9
+    config.opt_momentum = 0.9
+    config.opt_decay = 0.9
     config.opt_weight_decay = 0.  # by default, weight decay not applied in opt, l2 penalty above is used
 
     config.lr_schedule = 'step'
