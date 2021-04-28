@@ -50,8 +50,8 @@ def blend(image1: TensorLike, image2: TensorLike, factor: Number) -> tf.Tensor:
         if factor == 1.0:
             return image2
 
-        image1 = tf.cast(image1, dtype=tf.dtypes.float32)
-        image2 = tf.cast(image2, dtype=tf.dtypes.float32)
+        image1 = tf.cast(image1, dtype=tf.float32)
+        image2 = tf.cast(image2, dtype=tf.float32)
         difference = image2 - image1
         scaled = factor * difference
 
@@ -264,13 +264,12 @@ def autocontrast(image):
     Returns:
         A tensor with same shape and type as that of `image`.
     """
-    orig_dtype = image.dtype
     image = tf.image.convert_image_dtype(image, tf.float32)
 
     min_val, max_val = tf.reduce_min(image, axis=[0, 1]), tf.reduce_max(image, axis=[0, 1])
 
     norm_image = (image - min_val) / (max_val - min_val)
-    norm_image = tf.image.convert_image_dtype(norm_image, orig_dtype, saturate=True)
+    norm_image = tf.image.convert_image_dtype(norm_image, tf.uint8, saturate=True)
     return norm_image
 
 
@@ -291,16 +290,15 @@ def autocontrast2(image):
         # A possibly cheaper version can be done using cumsum/unique_with_counts
         # over the histogram values, rather than iterating over the entire image.
         # to compute mins and maxes.
-        lo = tf.to_float(tf.reduce_min(image_ch))
-        hi = tf.to_float(tf.reduce_max(image_ch))
+        lo = tf.cast(tf.reduce_min(image_ch), tf.float32)
+        hi = tf.cast(tf.reduce_max(image_ch), tf.float32)
 
         # Scale the image, making the lowest value 0 and the highest value 255.
         def scale_values(im):
             scale = 255.0 / (hi - lo)
             offset = -lo * scale
-            im = tf.to_float(im) * scale + offset
-            im = tf.clip_by_value(im, 0.0, 255.0)
-            return tf.cast(im, tf.uint8)
+            im = tf.cast(im, tf.float32) * scale + offset
+            return tf.image.convert_image_dtype(im, dtype=tf.uint8, saturate=True)
 
         result = tf.cond(hi > lo, lambda: scale_values(image_ch), lambda: image_ch)
         return result
