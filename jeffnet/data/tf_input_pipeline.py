@@ -35,6 +35,7 @@ import tensorflow_datasets as tfds
 from absl import logging
 
 from .tf_autoaugment import distort_image_with_randaugment
+from .tf_image_ops import to_float, to_uint8
 
 IMAGE_SIZE = 224
 CROP_PADDING = 32
@@ -88,12 +89,11 @@ def distorted_bounding_box_crop(
     target_height, target_width, _ = tf.unstack(bbox_size)
     crop_window = tf.stack([offset_y, offset_x, target_height, target_width])
     image = tf.io.decode_and_crop_jpeg(image_bytes, crop_window, channels=3)
-
     return image
 
 
-def resize(image, image_size, interpolation=tf.image.ResizeMethod.BICUBIC):
-    return tf.image.resize([image], [image_size, image_size], method=interpolation)[0]
+def resize(image, image_size, interpolation=tf.image.ResizeMethod.BICUBIC, antialias=True):
+    return tf.image.resize([image], [image_size, image_size], method=interpolation, antialias=antialias)[0]
 
 
 def at_least_x_are_equal(a, b, x):
@@ -131,14 +131,12 @@ def decode_and_center_crop(image_bytes, image_size, interpolation):
     image_width = shape[1]
 
     padded_center_crop_size = tf.cast(
-        ((image_size / (image_size + CROP_PADDING)) *
-         tf.cast(tf.minimum(image_height, image_width), tf.float32)),
+        (image_size / (image_size + CROP_PADDING)) * tf.cast(tf.minimum(image_height, image_width), tf.float32),
         tf.int32)
 
     offset_height = ((image_height - padded_center_crop_size) + 1) // 2
     offset_width = ((image_width - padded_center_crop_size) + 1) // 2
-    crop_window = tf.stack([offset_height, offset_width,
-                            padded_center_crop_size, padded_center_crop_size])
+    crop_window = tf.stack([offset_height, offset_width, padded_center_crop_size, padded_center_crop_size])
     image = tf.io.decode_and_crop_jpeg(image_bytes, crop_window)
     image = resize(image, image_size, interpolation)
 
@@ -155,8 +153,8 @@ def preprocess_for_train(
         image_bytes,
         dtype=tf.float32,
         image_size=IMAGE_SIZE,
-        mean = MEAN_RGB,
-        std = STDDEV_RGB,
+        mean=MEAN_RGB,
+        std=STDDEV_RGB,
         interpolation=tf.image.ResizeMethod.BICUBIC,
         augment_name=None,
         randaug_num_layers=None,
@@ -178,18 +176,17 @@ def preprocess_for_train(
 
     if augment_name:
         logging.info('Apply AutoAugment policy %s', augment_name)
-        input_image_type = image.dtype
-        image = tf.image.convert_image_dtype(image, dtype=tf.uint8, saturate=True)
         fill_value = [int(round(v)) for v in MEAN_RGB]
         # if augment_name == 'autoaugment':
         #     logging.info('Apply AutoAugment policy %s', augment_name)
         #     image = distort_image_with_autoaugment(image, 'v0')
+        image = to_uint8(image, saturate=False)
         if augment_name == 'randaugment':
             image = distort_image_with_randaugment(
                 image, randaug_num_layers, randaug_magnitude, fill_value=fill_value)
         else:
             raise ValueError('Invalid value for augment_name: %s' % augment_name)
-        image = tf.image.convert_image_dtype(image, dtype=input_image_type)
+        image = to_float(image)  # float32, [0., 255.)
 
     image = normalize_image(image, mean=mean, std=std)
     image = tf.image.convert_image_dtype(image, dtype=dtype)

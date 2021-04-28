@@ -22,13 +22,12 @@ RandAugment Reference: https://arxiv.org/abs/1909.13719
 # See the License for the specific language governing permissions and
 # limitations under the License.
 # ==============================================================================
-import inspect
 import tensorflow as tf
 
 # This signifies the max integer that the controller RNN could predict for the
 # augmentation scheme.
 from jeffnet.data.tf_image_ops import cutout, solarize, solarize_add, color, contrast, brightness, posterize, rotate, \
-    translate_x, translate_y, shear_x, shear_y, autocontrast, sharpness, equalize, invert
+    translate_x, translate_y, shear_x, shear_y, autocontrast, sharpness, equalize, invert, autocontrast_or_tone
 
 _MAX_LEVEL = 10.
 
@@ -39,7 +38,7 @@ IMAGENET_AUG_OPS = [
 ]
 
 NAME_TO_FUNC = {
-    'AutoContrast': autocontrast,
+    'AutoContrast': autocontrast_or_tone,
     'Equalize': equalize,
     'Invert': invert,
     'Rotate': rotate,

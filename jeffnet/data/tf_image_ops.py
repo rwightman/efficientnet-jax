@@ -19,62 +19,41 @@ equalize = tfi.equalize
 cutout = tfi.random_cutout
 
 
-def blend(image1: TensorLike, image2: TensorLike, factor: Number) -> tf.Tensor:
-    """Blend `image1` and `image2` using `factor`.
+def to_float(x: TensorLike):
+    # convert int image dtype to float, WITHOUT rescale to [0, 1)
+    return tf.cast(x, dtype=tf.float32)
 
-    Factor can be above 0.0.  A value of 0.0 means only `image1` is used.
-    A value of 1.0 means only `image2` is used.  A value between 0.0 and
+
+def to_uint8(x: TensorLike, saturate=True):
+    return tf.saturate_cast(x, tf.uint8) if saturate else tf.cast(x, tf.uint8)
+
+
+def blend(image1, image2, factor):
+    """Blend image1 and image2 using 'factor'.
+
+    A value of factor 0.0 means only image1 is used.
+    A value of 1.0 means only image2 is used.  A value between 0.0 and
     1.0 means we linearly interpolate the pixel values between the two
     images.  A value greater than 1.0 "extrapolates" the difference
     between the two pixel values, and we clip the results to values
     between 0 and 255.
 
     Args:
-      image1: An image Tensor of shape
-          `(num_rows, num_columns, num_channels)` (HWC), or
-          `(num_rows, num_columns)` (HW), or
-          `(num_channels, num_rows, num_columns)` (CHW).
-      image2: An image Tensor of shape
-          `(num_rows, num_columns, num_channels)` (HWC), or
-          `(num_rows, num_columns)` (HW), or
-          `(num_channels, num_rows, num_columns)`.
-      factor: A floating point value or Tensor of type `tf.float32` above 0.0.
+      image1: An image Tensor.
+      image2: An image Tensor.
+      factor: A floating point value above 0.0.
 
     Returns:
-      A blended image Tensor of `tf.float32`.
-
+      A blended image Tensor.
     """
-    with tf.name_scope("blend"):
-        if factor == 0.0:
-            return image1
-        if factor == 1.0:
-            return image2
-
-        image1 = tf.cast(image1, dtype=tf.float32)
-        image2 = tf.cast(image2, dtype=tf.float32)
-        difference = image2 - image1
-        scaled = factor * difference
-
-        # Do addition in float.
-        temp = image1 + scaled
-
-        # Interpolate
-        if factor > 0.0 and factor < 1.0:
-            # Interpolation means we always stay within 0 and 255.
-            return tf.cast(temp, tf.uint8)
-
-        # Extrapolate:
-        # We need to clip and then cast.
-        return tf.image.convert_image_dtype(temp, dtype=tf.uint8, saturate=True)
+    image1 = tf.cast(image1, tf.float32)
+    image2 = tf.cast(image2, tf.float32)
+    return to_uint8(image1 + factor * (image2 - image1))
 
 
 def invert(image):
     """Inverts the image pixels."""
-    if image.dtype == tf.uint8:
-        image = 255 - image
-    else:
-        image = 1. - image
-    return image
+    return 255 - image
 
 
 def solarize(image, threshold=128):
@@ -89,13 +68,9 @@ def solarize_add(image, addition=0, threshold=128):
     # we add 'addition' amount to it and then clip the
     # pixel value to be between 0 and 255. The value
     # of 'addition' is between -128 and 128.
-    addition = tf.cast(addition, image.dtype)
-    added_image = image + addition
-    added_image = tf.clip_by_value(
-        added_image,
-        tf.image.convert_image_dtype(tf.constant(0, tf.uint8), image.dtype),
-        tf.image.convert_image_dtype(tf.constant(255, tf.uint8), image.dtype))
-    return solarize(added_image, threshold)
+    added_image = tf.cast(image, tf.int64) + addition
+    added_image = to_uint8(added_image)
+    return tf.where(image < threshold, added_image, image)
 
 
 def color(image, factor):
@@ -116,30 +91,8 @@ def contrast(image, factor):
     hist = tf.histogram_fixed_width(degenerate, [0, 255], nbins=256)
     mean = tf.reduce_sum(tf.cast(hist, tf.float32)) / 256.0
     degenerate = tf.ones_like(degenerate, dtype=tf.float32) * mean
-    degenerate = tf.clip_by_value(degenerate, 0.0, 255.0)
-    degenerate = tf.image.grayscale_to_rgb(tf.cast(degenerate, tf.uint8))
+    degenerate = tf.image.grayscale_to_rgb(to_uint8(degenerate))
     return blend(degenerate, image, factor)
-
-
-def contrast2(image, magnitude):
-    """Adjusts the `magnitude` of contrast of an `image`.
-    Args:
-        image: An int or float tensor of shape `[height, width, num_channels]`.
-        magnitude: A 0-D float tensor or single floating point value above 0.0.
-    Returns:
-        A tensor with same shape and type as that of `image`.
-    """
-    grayed_image = tf.image.rgb_to_grayscale(image)
-    grayed_image = tf.cast(grayed_image, tf.int32)
-    bins = tf.constant(256, tf.int32)
-    histogram = tf.math.bincount(grayed_image, minlength=bins)
-    histogram = tf.cast(histogram, tf.float32)
-    mean = tf.reduce_sum(tf.cast(grayed_image, tf.float32)) / tf.reduce_sum(histogram)
-    mean = tf.clip_by_value(mean, 0.0, 255.0)
-
-    mean_image = tf.ones_like(grayed_image, tf.uint8) * tf.cast(mean, tf.uint8)
-    mean_image = tf.image.grayscale_to_rgb(mean_image)
-    return blend(mean_image, image, magnitude)
 
 
 def brightness(image, factor):
@@ -151,7 +104,7 @@ def brightness(image, factor):
 def sharpness(image, factor):
     """Implements Sharpness function from PIL using TF ops."""
     orig_image = image
-    image = tf.cast(image, tf.float32)
+    image = to_float(image)
     image_channels = image.shape[-1]
     # Make image 4D for conv operation.
     image = tf.expand_dims(image, 0)
@@ -159,12 +112,8 @@ def sharpness(image, factor):
     kernel = tf.constant([[1, 1, 1], [1, 5, 1], [1, 1, 1]], dtype=tf.float32, shape=[3, 3, 1, 1]) / 13.
     # Tile across channel dimension.
     kernel = tf.tile(kernel, [1, 1, image_channels, 1])
-    strides = [1, 1, 1, 1]
-    with tf.device('/cpu:0'):
-        # Some augmentation that uses depth-wise conv will cause crashing when
-        # training on GPU. See (b/156242594) for details.
-        degenerate = tf.nn.depthwise_conv2d(image, kernel, strides, padding='VALID')
-    degenerate = tf.squeeze(tf.image.convert_image_dtype(degenerate, dtype=tf.uint8, saturate=True), [0])
+    degenerate = tf.nn.depthwise_conv2d(image, kernel, strides=[1, 1, 1, 1], padding='VALID')
+    degenerate = tf.squeeze(to_uint8(degenerate), [0])
 
     # For the borders of the resulting image, fill in the values of the
     # original image.
@@ -245,64 +194,71 @@ def shear_x(image, level, fill_value):
     return unwrap(image, fill_value)
 
 
-def shear_y(image, level, fill_vaue):
+def shear_y(image, level, fill_value):
     """Equivalent of PIL Shearing in Y dimension."""
     # Shear parallel to y axis is a projective transform
     # with a matrix form of:
     # [1  0
     #  level  1].
     image = tfi.transform(wrap(image), [1., 0., 0., level, 1., 0., 0., 0.])
-    return unwrap(image, fill_vaue)
+    return unwrap(image, fill_value)
 
 
-def autocontrast(image):
-    """Normalizes `image` contrast by remapping the `image` histogram such
-    that the brightest pixel becomes 1.0 (float) / 255 (unsigned int) and
-    darkest pixel becomes 0.
+def autotone(image):
+    """Implements autotone (per channel autocontrast)
     Args:
-        image: An int or float tensor of shape `[height, width, num_channels]`.
+        image: A 3D uint8 tensor.
     Returns:
-        A tensor with same shape and type as that of `image`.
-    """
-    image = tf.image.convert_image_dtype(image, tf.float32)
-
-    min_val, max_val = tf.reduce_min(image, axis=[0, 1]), tf.reduce_max(image, axis=[0, 1])
-
-    norm_image = (image - min_val) / (max_val - min_val)
-    norm_image = tf.image.convert_image_dtype(norm_image, tf.uint8, saturate=True)
-    return norm_image
-
-
-@tf.function
-def autocontrast2(image):
-    """Implements Autocontrast function from PIL using TF ops.
-
-    Args:
-      image: A 3D uint8 tensor.
-
-    Returns:
-      The image after it has had autocontrast applied to it and will be of type
-      uint8.
+        The image after it has had autocontrast applied to it and will be of type uint8.
     """
 
-    def scale_channel(image_ch):
+    def scale_channel(chan):
         """Scale the 2D image using the autocontrast rule."""
         # A possibly cheaper version can be done using cumsum/unique_with_counts
         # over the histogram values, rather than iterating over the entire image.
         # to compute mins and maxes.
-        lo = tf.cast(tf.reduce_min(image_ch), tf.float32)
-        hi = tf.cast(tf.reduce_max(image_ch), tf.float32)
+        lo = to_float(tf.reduce_min(chan))
+        hi = to_float(tf.reduce_max(chan))
 
         # Scale the image, making the lowest value 0 and the highest value 255.
         def scale_values(im):
             scale = 255.0 / (hi - lo)
             offset = -lo * scale
-            im = tf.cast(im, tf.float32) * scale + offset
-            return tf.image.convert_image_dtype(im, dtype=tf.uint8, saturate=True)
+            im = to_float(im) * scale + offset
+            return to_uint8(im)
 
-        result = tf.cond(hi > lo, lambda: scale_values(image_ch), lambda: image_ch)
+        result = tf.cond(hi > lo, lambda: scale_values(chan), lambda: chan)
         return result
 
-    # Scales each channel independently and then stacks the result.
-    image = tf.stack([scale_channel(image[:, :, i]) for i in range(tf.shape(image)[2])], 2)
+    # Assumes RGB for now.  Scales each channel independently and then stacks the result.
+    s1 = scale_channel(image[:, :, 0])
+    s2 = scale_channel(image[:, :, 1])
+    s3 = scale_channel(image[:, :, 2])
+    image = tf.stack([s1, s2, s3], 2)
     return image
+
+
+def autocontrast(image):
+    """ Normalizes `image` contrast by remapping the `image` histogram such
+        that the brightest pixel becomes 1.0 (float) / 255 (unsigned int) and
+        darkest pixel becomes 0.
+    Args:
+        image: An int or float tensor of shape `[height, width, num_channels]`.
+    Returns:
+        A tensor with same shape and type as that of `image`.
+    """
+    min_val = tf.reduce_min(image, axis=[0, 1])
+    max_val = tf.reduce_max(image, axis=[0, 1])
+    norm_image = to_float(image - min_val) / to_float(max_val - min_val)
+    return to_uint8(norm_image)
+
+
+def autocontrast_or_tone(image):
+    """
+    """
+    choice = tf.cast(tf.floor(tf.random.uniform([], dtype=tf.float32) + 0.5), tf.bool)
+    augmented_image = tf.cond(
+        choice,
+        lambda: autocontrast(image),
+        lambda: autotone(image))
+    return augmented_image
