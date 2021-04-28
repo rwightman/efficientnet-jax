@@ -30,9 +30,11 @@ Original copyrights below. Modifications by Ross Wightman.
 from typing import Optional, Tuple
 
 import jax
-
 import tensorflow as tf
 import tensorflow_datasets as tfds
+from absl import logging
+
+from .tf_autoaugment import distort_image_with_randaugment
 
 IMAGE_SIZE = 224
 CROP_PADDING = 32
@@ -156,6 +158,9 @@ def preprocess_for_train(
         mean = MEAN_RGB,
         std = STDDEV_RGB,
         interpolation=tf.image.ResizeMethod.BICUBIC,
+        augment_name=None,
+        randaug_num_layers=None,
+        randaug_magnitude=None,
 ):
     """Preprocesses the given image for training.
 
@@ -170,6 +175,22 @@ def preprocess_for_train(
     image = decode_and_random_crop(image_bytes, image_size, interpolation)
     image = tf.image.random_flip_left_right(image)
     image = tf.reshape(image, [image_size, image_size, 3])
+
+    if augment_name:
+        logging.info('Apply AutoAugment policy %s', augment_name)
+        input_image_type = image.dtype
+        image = tf.image.convert_image_dtype(image, dtype=tf.uint8, saturate=True)
+        fill_value = [int(round(v)) for v in MEAN_RGB]
+        # if augment_name == 'autoaugment':
+        #     logging.info('Apply AutoAugment policy %s', augment_name)
+        #     image = distort_image_with_autoaugment(image, 'v0')
+        if augment_name == 'randaugment':
+            image = distort_image_with_randaugment(
+                image, randaug_num_layers, randaug_magnitude, fill_value=fill_value)
+        else:
+            raise ValueError('Invalid value for augment_name: %s' % augment_name)
+        image = tf.image.convert_image_dtype(image, dtype=input_image_type)
+
     image = normalize_image(image, mean=mean, std=std)
     image = tf.image.convert_image_dtype(image, dtype=dtype)
     return image
@@ -209,6 +230,9 @@ def create_split(
         mean: Optional[Tuple[float]] = None,
         std: Optional[Tuple[float]] = None,
         interpolation: str = 'bicubic',
+        augment_name: Optional[str] = None,
+        randaug_num_layers: Optional[int] = None,
+        randaug_magnitude: Optional[int] = None,
         cache: bool = False,
         no_repeat: bool = False,
 ):
@@ -252,7 +276,11 @@ def create_split(
 
     def _decode_example(example):
         if train:
-            image = preprocess_for_train(example['image'], input_dtype, image_size, mean, std, interpolation)
+            image = preprocess_for_train(
+                example['image'], input_dtype, image_size, mean, std, interpolation,
+                augment_name=augment_name,
+                randaug_num_layers=randaug_num_layers,
+                randaug_magnitude=randaug_magnitude)
         else:
             image = preprocess_for_eval(example['image'], input_dtype, image_size, mean, std, interpolation)
         return {'image': image, 'label': example['label']}

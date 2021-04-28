@@ -197,9 +197,23 @@ def prepare_tf_data(xs):
     return jax.tree_map(_prepare, xs)
 
 
-def create_input_iter(dataset_builder, batch_size, train, image_size, half_precision, cache):
+def create_input_iter(
+        dataset_builder,
+        batch_size,
+        train,
+        image_size,
+        augment_name=None,
+        randaug_num_layers=None,
+        randaug_magnitude=None,
+        half_precision=False,
+        cache=False):
     ds = input_pipeline.create_split(
-        dataset_builder, batch_size, train=train, image_size=image_size, half_precision=half_precision, cache=cache)
+        dataset_builder, batch_size, train=train, image_size=image_size,
+        augment_name=augment_name,
+        randaug_num_layers=randaug_num_layers,
+        randaug_magnitude=randaug_magnitude,
+        half_precision=half_precision,
+        cache=cache)
     it = map(prepare_tf_data, ds)
     it = flax.jax_utils.prefetch_to_device(it, 2)
     return it
@@ -256,7 +270,12 @@ def train_and_evaluate(config: ml_collections.ConfigDict, resume: str):
 
     train_iter = create_input_iter(
         dataset_builder, local_batch_size, train=True,
-        image_size=image_size, half_precision=half_prec, cache=config.cache)
+        image_size=image_size,
+        augment_name=config.autoaugment,
+        randaug_magnitude=config.randaug_magnitude,
+        randaug_num_layers=config.randaug_num_layers,
+        half_precision=half_prec,
+        cache=config.cache)
 
     eval_iter = create_input_iter(
         dataset_builder, local_eval_batch_size, train=False,

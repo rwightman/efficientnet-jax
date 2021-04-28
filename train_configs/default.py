@@ -70,6 +70,9 @@ def get_config():
     config.lr_minimum = 1e-6
     config.num_epochs = 450
 
+    config.autoaugment = 'randaugment'
+    config.randaug_magnitude = 10
+    config.randaug_num_layers = 2
     config.cache = False
     config.half_precision = True
 
