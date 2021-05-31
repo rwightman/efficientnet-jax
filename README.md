@@ -1,5 +1,9 @@
 # EfficientNet JAX - Flax Linen and Objax
 
+## Acknowledgements
+
+Verification of training code was made possible with Cloud TPUs via Google's TPU Research Cloud (TRC) (https://www.tensorflow.org/tfrc)
+
 ## Intro
 This is very much a giant steaming work in progress. Jax, jaxlib, and the NN libraries I'm using are shifting week to week.
 
