@@ -71,7 +71,7 @@ class Conv2d(Module):
             x, self.weight.value, self.strides, self.padding,
             rhs_dilation=self.dilations, feature_group_count=self.groups,
             dimension_numbers=('NCHW', 'OIHW', 'NCHW'))
-        if self.bias:
+        if self.bias is not None:
             y += self.bias.value.reshape((1, -1, 1, 1))
         return y
 
@@ -102,6 +102,6 @@ class Linear(Module):
     def __call__(self, x: JaxArray) -> JaxArray:
         """Returns the results of applying the linear transformation to input x."""
         y = jnp.dot(x, self.weight.value.transpose())
-        if self.bias:
+        if self.bias is not None:
             y += self.bias.value
         return y
